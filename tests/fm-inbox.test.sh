@@ -544,3 +544,38 @@ run_inbox "$home" drain --ack "$did" >/dev/null || fail "drain --ack failed"
 assert_absent "$home/state/inbox/$did.note" "acked note leaves pending"
 assert_present "$home/state/inbox/handled/$did.note" "acked note is in handled"
 pass "drain --ack still moves the note to handled"
+
+# --- a secondmate home's note lands in the parent home -----------------------
+
+parent=$(make_home note-parent)
+mate=$(make_home note-mate)
+printf 'note-mate\n' > "$mate/.fm-secondmate-home"
+printf 'schema=fm-secondmate-parent.v1\nroute=local\nparent_home=%s\n' "$parent" \
+  > "$mate/.fm-secondmate-parent"
+mate_out=$(FM_HOME="$mate" "$INBOX_BIN" note "from the mate") \
+  || fail "a mate note should resolve its parent home"
+assert_contains "$mate_out" "queued " "a mate note is queued"
+assert_equals "1" "$(count_notes "$parent")" "the note lands in the parent home"
+assert_equals "0" "$(count_notes "$mate")" "the mate home keeps no copy"
+assert_equals "1" "$(count_wakes "$parent")" "the parent home gets the wake"
+main_out=$(FM_HOME="$parent" "$INBOX_BIN" note "from main") \
+  || fail "a main-home note should be unchanged"
+assert_contains "$main_out" "queued " "a main-home note is queued"
+assert_equals "2" "$(count_notes "$parent")" "a main-home note stays in its own home"
+pass "a secondmate note resolves the parent home with no FM_HOME override"
+
+orphan=$(make_home note-orphan)
+printf 'note-orphan\n' > "$orphan/.fm-secondmate-home"
+if orphan_out=$(FM_HOME="$orphan" "$INBOX_BIN" note "lost" 2>&1); then
+  fail "a mate with no parent binding should refuse"
+fi
+assert_contains "$orphan_out" "parent home is unresolved" "a missing binding is named"
+assert_equals "0" "$(count_notes "$orphan")" "an unresolved parent writes no note"
+remote=$(make_home note-remote)
+printf 'note-remote\n' > "$remote/.fm-secondmate-home"
+printf 'schema=fm-secondmate-parent.v1\nroute=remote\n' > "$remote/.fm-secondmate-parent"
+if remote_out=$(FM_HOME="$remote" "$INBOX_BIN" note "far" 2>&1); then
+  fail "a remote-parent mate should refuse"
+fi
+assert_contains "$remote_out" "parent is remote" "a remote parent is named"
+pass "an unresolvable or remote parent refuses with a clear message"

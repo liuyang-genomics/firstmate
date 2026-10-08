@@ -1,0 +1,16 @@
+# bin/fm-test-run.sh tests/fm-secondmate-registry-icon.test.sh tests/fm-remote-secondmate-lifecycle-e2e.test.sh
+FM_TEST_SLOWEST rank=1 script=tests/fm-remote-secondmate-lifecycle-e2e.test.sh duration_ms=932130
+FM_TEST_SLOWEST rank=2 script=tests/fm-secondmate-registry-icon.test.sh duration_ms=3965
+[exited with code 0]
+
+# CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test .claude/mods/firstmate-calm
+ 53 pass
+ 0 fail
+Ran 53 tests across 3 files. [1.63s]
+exit=0
+
+# bash tests/fm-secondmate-registry-icon.test.sh
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+ok - local same-placement re-seed preserves the registered icon

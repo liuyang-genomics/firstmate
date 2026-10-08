@@ -1,0 +1,26 @@
+# Claude Code v2.1.285 lab primary, FM_HOME=<lab>, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
+# registry data/secondmates.md:
+#   - writer - Writes the chapters (home: /h/w; scope: writing; projects: book; icon: 🎙️; added 2026-10-07)
+#   - lab - Far research (host: build-mac; root: /r; home: /h/r; scope: far; projects: y; icon: 🔬; added 2026-10-08)
+#   - plain - No icon mate (home: /h/p; scope: plain; projects: x; added 2026-10-09)
+# transcript after appending writer(routine), plain(routine), lab(captain):
+ ▐▛███▛█   Claude Code v2.1.285
+▝▜██████▀  Fable 5.1 · Claude Pro
+ ▝▝   ▝▝   ~/.no-mistakes/worktrees/b802139cbba3/01M4DQBAA8XVMNWFW77M2PB3WY
+⚠ Your login expires in 3 days · run /login to renew
+⏺ fm: 🎙 writer: Chapter 3 draft merged
+⏺ fm: ⛵ plain: Nightly sync finished
+⏺ fm: ⚓🔬 [seq 3] lab: Experiment needs a decision on the dataset
+                                                                                                               Update available! Run: brew upgrade claude-code
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Fable 5.1
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+# after editing writer's icon 🎙️ -> 📝 in data/secondmates.md (no restart) and appending seq 4 (visible) and seq 5 (silent):
+⏺ fm: 🎙 writer: Chapter 3 draft merged
+⏺ fm: ⛵ plain: Nightly sync finished
+⏺ fm: ⚓🔬 [seq 3] lab: Experiment needs a decision on the dataset
+⏺ fm: 📝 writer: Chapter 4 outline merged after icon edit
+# second lab Claude, FM_HOME=<lab> FM_STATE_OVERRIDE=<lab>/state-alt; outcome appended through the same override:
+⏺ fm: 🔬 lab: Override state dir still finds the registry icon

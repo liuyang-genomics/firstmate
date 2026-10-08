@@ -1,0 +1,16 @@
+# Pi 0.87.1 lab primary from the run worktree, FM_HOME=<lab>, Pi process given state/.lock; /new session replays unread outcomes:
+# registry data/secondmates.md at this point:
+#   - writer - Writes the chapters (home: /h/w; scope: writing; projects: book; icon: 📝; added 2026-10-07)
+#   - lab - Far research (host: build-mac; root: /r; home: /h/r; scope: far; projects: y; icon: 🔬; added 2026-10-08)
+#   - plain - No icon mate (home: /h/p; scope: plain; projects: x; added 2026-10-09)
+ 📝 writer: Chapter 3 draft merged
+ ⛵ plain: Nightly sync finished
+ ⚓🔬 [seq 3] lab: Experiment needs a decision on the dataset
+ 📝 writer: Chapter 4 outline merged after icon edit
+ ✓ New session started
+# same Pi process (pid 81331): plain delivered with icon 🧪, then registry edited 🧪 -> 🧩 while Pi ran, next outcome delivered:
+ 🧩 plain: third note, icon edited while this Pi process ran
+# persisted Pi session records (customType fm-branch-merge) for the plain task:
+#   "customType":"fm-branch-merge","content":"⛵ plain: Nightly sync finished","display":true,"id":"fc85ec47","parentId":"e74a3799","timestamp":"2026-10-08T12:38:03.025Z"}
+#   "customType":"fm-branch-merge","content":"🧩 plain: third note, icon edited while this Pi process ran","display":true,"details":{"icon":"🧩"}
+#   "customType":"fm-branch-merge","content":"🧪 plain: first note in this Pi process","display":true,"details":{"icon":"🧪"}

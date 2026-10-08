@@ -2782,6 +2782,14 @@ while :; do
     triage_log "inactive-outcome reconciliation unavailable"
   fi
 
+  # A captain hold's --until date arriving raises no signal of its own, so this
+  # scan appends one wake per expired deferral (bin/fm-hold-expiry.sh).
+  hold_expiry_out=
+  if hold_expiry_out=$(FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
+    "$SCRIPT_DIR/fm-hold-expiry.sh" scan 2>/dev/null) && [ -n "$hold_expiry_out" ]; then
+    wake "check: hold-expired"
+  fi
+
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.
   # Evaluated BEFORE the signal scan: wake() exits the cycle, so a check placed

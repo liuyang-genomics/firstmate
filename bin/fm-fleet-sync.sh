@@ -12,7 +12,10 @@
 # ... - needs attention" warning rather than a quiet drift. Nothing is ever forced,
 # stashed, or discarded.
 # Still skips (benignly) local-only/no-origin projects, missing remotes/branches,
-# and fetch failures. A project whose registry entry bin/fm-project-mode.sh
+# and fetch failures. A local-only project is skipped by default; naming one
+# project with --include-local-only syncs its clone through the same guards
+# without touching its registered delivery mode (it is never flipped, so no
+# recipe is needed), and still skips it when it has no origin remote. A project whose registry entry bin/fm-project-mode.sh
 # refuses is skipped too, naming that command so its refusal is readable, rather
 # than synced under a guessed posture.
 # A candidate under projects/ must be the root of its own work tree: git discovery
@@ -26,7 +29,8 @@
 # killed mid-write - e.g. a timed-out bootstrap sync or a teardown process kill),
 # it is retried with a bounded wait and removed only when provably stale; see
 # fetch_with_packed_refs_lock_guard and the FM_FLEET_SYNC_PACKED_REFS_LOCK_* knobs.
-# Usage: fm-fleet-sync.sh [<project-dir-or-name>]
+# Usage: fm-fleet-sync.sh [--include-local-only <project-dir-or-name>]
+#        fm-fleet-sync.sh [<project-dir-or-name>]
 # The single-project form accepts either a path (absolute, or relative to the
 # caller's cwd) or a bare "<name>"/"projects/<name>" form, resolved against
 # this home's projects dir ($FM_HOME/projects, or $FM_PROJECTS_OVERRIDE).
@@ -65,12 +69,18 @@ if ! [[ "$FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS" =~ ^([0-9]+([.][0-9]*)?|[
 fi
 
 usage() {
-  echo "usage: fm-fleet-sync.sh [<project-dir-or-name>]" >&2
+  echo "usage: fm-fleet-sync.sh [--include-local-only <project-dir-or-name>] | [<project-dir-or-name>]" >&2
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   usage
   exit 0
+fi
+INCLUDE_LOCAL_ONLY=no
+if [ "${1:-}" = "--include-local-only" ]; then
+  INCLUDE_LOCAL_ONLY=yes
+  shift
+  [ $# -eq 1 ] || { usage; exit 1; }
 fi
 [ $# -le 1 ] || { usage; exit 1; }
 
@@ -333,7 +343,7 @@ sync_project() {
     return 0
   fi
   mode=${mode_line%% *}
-  if [ "$mode" = "local-only" ]; then
+  if [ "$mode" = "local-only" ] && [ "$INCLUDE_LOCAL_ONLY" != yes ]; then
     echo "$label: skipped: local-only project"
     return 0
   fi

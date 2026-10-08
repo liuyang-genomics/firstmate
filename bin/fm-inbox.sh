@@ -88,7 +88,9 @@
 # home already uses for other tools.
 #
 # Environment:
-#   FM_HOME              operational home whose state/ and data/ are used.
+#   FM_HOME              operational home whose state/ and data/ are used. `note` and
+#                        `say` from a secondmate home go to its local parent home
+#                        (via .fm-secondmate-parent) and refuse if it cannot be resolved.
 #
 # PRIVACY: `say` sends your audio and `ask` sends your question to Bedrock.
 # `note`, `announce`, `reply`, `receipts`, `ready`, `status`, `list` and `drain`
@@ -120,6 +122,33 @@ export PATH
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="$(cd "$SELF_DIR/.." && pwd)"
 FM_HOME="${FM_HOME:-$FM_ROOT}"
+
+# A note or spoken note from a secondmate home is for the parent, so resolve the
+# parent home from the mate's own binding instead of requiring FM_HOME=<parent>.
+# A main home, or an explicit state/data override, keeps the home it was given.
+case "${1:-}" in
+  note|say)
+    if [ -z "${FM_STATE_OVERRIDE:-}" ] && [ -z "${FM_DATA_OVERRIDE:-}" ] \
+      && [ -e "$FM_HOME/.fm-secondmate-home" ]; then
+      # shellcheck source=bin/fm-parent-channel-lib.sh
+      . "$SELF_DIR/fm-parent-channel-lib.sh"
+      _parent_rc=0
+      fm_parent_channel_destination "$FM_HOME" "$FM_HOME/state" >/dev/null || _parent_rc=$?
+      if [ "$_parent_rc" -ne 0 ] || [ "$FM_PARENT_CHANNEL_ROUTE" != local ]; then
+        printf 'fm-inbox: cannot send a %s from secondmate home %s: ' "$1" "$FM_HOME" >&2
+        if [ "$_parent_rc" -eq 0 ]; then
+          printf 'its parent is remote, so the parent home is not on this machine\n' >&2
+        else
+          printf 'its parent home is unresolved (parent-channel code %s); check .fm-secondmate-home and .fm-secondmate-parent\n' "$_parent_rc" >&2
+        fi
+        exit 1
+      fi
+      FM_HOME=$FM_SECONDMATE_PARENT_HOME
+      unset _parent_rc
+    fi
+    ;;
+esac
+
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 INBOX="$STATE/inbox"

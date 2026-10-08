@@ -431,6 +431,32 @@ test_unresolvable_registry_posture_skipped() {
   pass "a clone whose registry entry the parser refuses is skipped, never synced on the default posture"
 }
 
+# --include-local-only names one local-only project and syncs it through the same
+# guards without changing its registered mode; the default path stays blocked and
+# the whole-fleet form refuses the flag.
+test_include_local_only_syncs_without_flipping_mode() {
+  local home clone out before
+  home=$(new_home)
+  clone=$(build_pair "$home" upsilon)
+  advance_origin "$home" upsilon C1
+  mkdir -p "$home/data"
+  printf -- '- upsilon [local-only] - test project (added 2026-06-27)\n' > "$home/data/projects.md"
+  before=$(head_sha "$clone")
+
+  out=$(run_sync "$home" "$clone")
+  [ "$(head_sha "$clone")" = "$before" ] || fail "default path synced a local-only clone"
+
+  out=$(run_sync "$home" --include-local-only "$clone")
+
+  assert_contains "$out" "upsilon: synced" "--include-local-only did not sync the local-only clone"
+  [ "$(head_sha "$clone")" != "$before" ] || fail "local-only clone was not fast-forwarded"
+  grep -q 'upsilon \[local-only\]' "$home/data/projects.md" || fail "registered delivery mode was changed"
+  if run_sync "$home" --include-local-only >/dev/null; then
+    fail "--include-local-only without a project was accepted"
+  fi
+  pass "--include-local-only syncs one local-only clone and leaves its mode and the default block intact"
+}
+
 test_single_project_by_bare_name_resolves() {
   local home out
   home=$(new_home)
@@ -758,6 +784,7 @@ test_already_current_unchanged
 test_no_origin_skipped
 test_local_only_skipped
 test_unresolvable_registry_posture_skipped
+test_include_local_only_syncs_without_flipping_mode
 test_single_project_by_bare_name_resolves
 test_single_project_by_bare_name_ignores_cwd_shadow
 test_single_project_by_projects_relative_name_resolves

@@ -501,6 +501,40 @@ EOF
   pass "fm-merge-local: a registry change cannot redirect an in-flight local-only task"
 }
 
+test_local_merge_refuses_stale_branch_with_rebase_steer() {
+  local home proj id main out status head_before
+  home="$TMP_ROOT/local-merge-stale/home"
+  proj="$TMP_ROOT/local-merge-stale/proj"
+  id=local-merge-stale-e2
+  mkdir -p "$home/state" "$home/data" "$proj"
+  git -C "$proj" init -q || fail "could not initialize stale-branch fixture"
+  git -C "$proj" config user.email test@example.com
+  git -C "$proj" config user.name test
+  printf 'base\n' > "$proj/base"
+  git -C "$proj" add base || fail "could not stage stale-branch fixture base"
+  git -C "$proj" commit -qm base || fail "could not commit stale-branch fixture base"
+  main=$(git -C "$proj" branch --show-current)
+  git -C "$proj" checkout -qb "fm/$id" || fail "could not create stale ship branch"
+  printf 'change\n' > "$proj/change"
+  git -C "$proj" add change || fail "could not stage stale ship branch change"
+  git -C "$proj" commit -qm change || fail "could not commit stale ship branch change"
+  git -C "$proj" checkout -q "$main" || fail "could not restore stale-branch fixture default branch"
+  printf 'newer\n' > "$proj/newer"
+  git -C "$proj" add newer || fail "could not stage newer default-branch commit"
+  git -C "$proj" commit -qm newer || fail "could not commit newer default-branch commit"
+  head_before=$(git -C "$proj" rev-parse HEAD)
+  printf 'project=%s\nmode=local-only\nbranch=fm/%s\n' "$proj" "$id" > "$home/state/$id.meta"
+  status=0
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$MERGE_LOCAL" "$id" 2>&1) || status=$?
+  [ "$status" -ne 0 ] || fail "local merge accepted a branch diverged from local $main"
+  assert_contains "$out" "1 behind, 1 ahead" "refusal did not report how far the branch diverged"
+  assert_contains "$out" "git rebase $main" "refusal did not name the exact rebase command"
+  assert_contains "$out" "bin/fm-send.sh $id" "refusal did not name the worker steer"
+  [ "$(git -C "$proj" rev-parse HEAD)" = "$head_before" ] \
+    || fail "refused local merge moved the default branch"
+  pass "fm-merge-local: a diverged branch is refused with the exact rebase steer"
+}
+
 # A registered name may contain spaces, and the lookup must match the whole
 # name rather than only its first whitespace-delimited token (issue #1977).
 # The longer "foo bar" row is listed before the "foo" row so a leading-prefix
@@ -1635,6 +1669,7 @@ test_promotion_delivers_the_real_definition_of_done
 test_promotion_persists_the_selected_ship_branch
 test_promotion_branch_command_is_shell_safe
 test_local_merge_uses_the_recorded_ship_branch
+test_local_merge_refuses_stale_branch_with_rebase_steer
 test_project_mode_matches_whole_multiword_names
 test_project_mode_maps_the_conditional_policy
 test_project_mode_binds_the_forge_orthogonally

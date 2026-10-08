@@ -8,7 +8,7 @@
 # rule #1 "never run state-changing git in projects/", and it is narrow: it only
 # runs for mode=local-only tasks, only after the captain approves (or yolo=on
 # auto-approves), and only as a clean fast-forward - it refuses a diverged branch
-# and tells you to have the crewmate rebase. See AGENTS.md prime directives,
+# and names the exact rebase steer to send the crewmate. See AGENTS.md prime directives,
 # project management, and task lifecycle.
 # The task's existing per-task control lock serializes the captain-hold check
 # through that fast-forward. A still-held or unreadable row refuses before the
@@ -115,8 +115,12 @@ fi
 
 # Clean fast-forward only: DEFAULT must be an ancestor of BRANCH.
 if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$BRANCH"; then
-  echo "REFUSED: $BRANCH is not a fast-forward of $DEFAULT (it has diverged)." >&2
-  echo "Have the crewmate rebase $BRANCH onto $DEFAULT, then retry." >&2
+  counts=$(git -C "$PROJ" rev-list --left-right --count "$DEFAULT...$BRANCH" 2>/dev/null || true)
+  behind=${counts%%[[:space:]]*}
+  ahead=${counts##*[[:space:]]}
+  echo "REFUSED: $BRANCH is not a fast-forward of $DEFAULT (${behind:-?} behind, ${ahead:-?} ahead); history is never rewritten here." >&2
+  echo "Steer the worker: bin/fm-send.sh $ID \"Rebase onto local $DEFAULT: git rebase $DEFAULT (in your worktree, on $BRANCH), resolve conflicts, rerun your checks, then report ready again.\"" >&2
+  echo "Then retry: bin/fm-merge-local.sh $ID" >&2
   exit 1
 fi
 

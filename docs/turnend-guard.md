@@ -352,6 +352,7 @@ Ownership is re-verified before every arm invocation, episode-state mutation, le
 #### Exit status as the commit point
 
 The irrevocable commit point of a translation is the exit status, because the harness delivers the collected stderr banner only on exit 2.
+An actionable banner tells the handling turn to run `bin/fm-wake-brief.sh` first and names `bin/fm-wake-drain.sh` as the raw fallback; the Cursor follow-up carries the same instruction.
 An owned terminal commit therefore decides the exit:
 
 - Markerless outcomes commit with the ledger write.

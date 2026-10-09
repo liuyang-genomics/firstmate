@@ -6,7 +6,8 @@ When this session owns supervision and away mode is not active:
 2. Routine watcher arm and re-arm are owned by the `stop` hook (`bin/fm-turnend-guard-cursor.sh`), never by you.
    Cursor runs that hook synchronously and awaits it, so every turn end while supervision is needed parks the turn boundary open on one home-scoped watcher cycle, with no model command and no model tokens spent while parked.
 3. An actionable close wakes you as a follow-up turn carrying the `watcher` operational kind.
-   On that wake, run `bin/fm-wake-drain.sh` first and handle it.
+   On that wake, run `bin/fm-wake-brief.sh` first and handle it.
+   It drains once and prints one cheap-model line per queued wake plus the drain's other sections and its exact acknowledgement commands verbatim; run `bin/fm-wake-drain.sh` directly when you need the raw rows (`bin/fm-wake-brief.sh` header owns the fallback rules).
    Do not run `bin/fm-watch-arm.sh` after an ordinary wake; the next turn end parks again automatically when supervision is still needed.
    Do not invent a wake from an attach-status line alone; drain and act only on real wake records, the drain's `OPEN DECISIONS` entries, or a real watcher reason line.
 4. The captain keeps control while the hook is parked.

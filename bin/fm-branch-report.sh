@@ -15,11 +15,13 @@
 # the host's turn record; this script only compares against it.
 #
 # Usage:
-#   fm-branch-report.sh --task <id|fleet> --verdict routine|captain \
+#   fm-branch-report.sh --task <id|fleet> --verdict routine|captain|digest \
 #       --summary <text> [--silent true|false] [--wake <text>]
 #
 # The verdict criteria are owned by bin/fm-branch-prompt.sh ("Verdict: routine
-# or captain"); --silent true is legal only for a routine outcome.
+# or captain"); --silent true is legal only for a routine outcome. digest is
+# legal only in an attended turn while no away record exists: away, every
+# captain-visible result waits for the return brief as a captain outcome.
 # --wake defaults to the wake reason the host recorded for the turn.
 #
 # Only the branch actor of a live host turn may report: FM_SUPERVISION_ACTOR
@@ -41,7 +43,9 @@
 # host's own handback. Silent outcomes remain in the store but are not queued
 # or relayed as notes. An attended turn queues nothing: its captain rows reach
 # MAIN through the host's branch-outcome exit and the drain's BRANCH OUTCOMES
-# section (bin/fm-wake-drain.sh), and its routine rows stay in the store.
+# section (bin/fm-wake-drain.sh), its digest rows through that same section
+# when the host's digest deadline or any earlier drain presents them, and its
+# routine rows stay in the store.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -78,10 +82,10 @@ done
 
 TASK=$(printf '%s' "$TASK" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
 SUMMARY=$(printf '%s' "$SUMMARY" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-case "$VERDICT" in routine|captain) ;; *) VERDICT= ;; esac
+case "$VERDICT" in routine|captain|digest) ;; *) VERDICT= ;; esac
 case "$SILENT" in true|false) ;; *) usage ;; esac
 if [ -z "$TASK" ] || [ -z "$SUMMARY" ] || [ -z "$VERDICT" ]; then
-  echo "invalid report: --task, --verdict (routine|captain), and --summary are required" >&2
+  echo "invalid report: --task, --verdict (routine|captain|digest), and --summary are required" >&2
   exit 2
 fi
 if [ "$SILENT" = true ] && [ "$VERDICT" != routine ]; then
@@ -118,6 +122,11 @@ fi
 [ "$WAKE_SET" -eq 1 ] || WAKE=$(turn_field wake)
 
 set -- append --task "$TASK" --verdict "$VERDICT" --summary "$SUMMARY" --silent "$SILENT"
+if [ "$VERDICT" = digest ] \
+  && { [ "$(turn_field posture)" != attended ] || fm_afk_contract_away_present "$STATE"; }; then
+  refuse "digest is only for an attended wake; while the captain is away, report this result with verdict captain"
+fi
+
 [ -z "$WAKE" ] || set -- "$@" --wake "$WAKE"
 if ! SEQ=$("$SCRIPT_DIR/fm-branch-outcome.sh" "$@"); then
   echo "outcome store append failed (nothing recorded)" >&2
@@ -134,6 +143,8 @@ fi
 if [ "$(turn_field posture)" = attended ]; then
   if [ "$VERDICT" = captain ] && ! fm_afk_contract_away_present "$STATE"; then
     printf 'recorded seq %s [captain]; MAIN processes it from its next drain\n' "$SEQ"
+  elif [ "$VERDICT" = digest ] && ! fm_afk_contract_away_present "$STATE"; then
+    printf 'recorded seq %s [digest]; MAIN receives it in its next drain or the next batched digest\n' "$SEQ"
   else
     printf 'recorded seq %s [%s]; it waits in the outcome store for MAIN\n' "$SEQ" "$VERDICT"
   fi

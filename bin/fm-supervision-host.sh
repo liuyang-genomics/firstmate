@@ -77,14 +77,24 @@
 # releases the branch's leases and grant, and counts the wake handled only
 # when that turn exited cleanly, recorded a durable report
 # (bin/fm-branch-report.sh), and left none of its granted rows in the wake
-# queue. A handled wake with only routine outcomes never wakes
+# queue. A handled wake with only routine or digest outcomes never wakes
 # main, and neither does any handled wake while away: captain outcomes wait in
 # the outcome store for the return drain's BRANCH OUTCOMES section. A handled
 # attended wake that recorded a captain outcome exits with one "supervision-host: branch-outcome:"
 # line naming its store rows, without the close it handled; main drains, where
 # the BRANCH OUTCOMES section (bin/fm-wake-drain.sh) presents every
-# unprocessed captain outcome until main acknowledges it. Otherwise the host
-# parks on the successor.
+# unprocessed captain outcome until main acknowledges it, together with every
+# digest outcome not yet presented. Otherwise the host parks on the successor.
+#
+# THE DIGEST. Attended, a digest outcome (a finished, captain-visible result
+# that needs no action) waits for the next drain, whatever wakes main for it.
+# Whenever the oldest digest row no drain has presented yet is at least
+# FM_SUPERVISION_HOST_DIGEST_SECONDS old (default 1800), checked on every
+# loop pass, the host ends its park the way the park boundary does, with one
+# "supervision-host: branch-outcome: digest" line naming those rows; main
+# drains, relays what matters, and ends its turn, and that turn end starts the
+# next park. While an away record or the away daemon's flag exists the
+# deadline waits for the return.
 # Every other outcome exits with the close's own reason line plus one
 # "supervision-host:" line saying why main has this wake, after stopping the
 # successor cycle so main's next turn end starts from the same state as
@@ -164,7 +174,8 @@
 # the boundary), FM_SUPERVISION_HOST_TURN_TIMEOUT (1200), FM_SUPERVISION_HOST_ROTATE_TURNS (20:
 # a new engine conversation after this many turns; every main session start
 # also opens a new one), FM_SUPERVISION_HOST_READY_TIMEOUT (25: how long a
-# successor cycle may take to verify), FM_SUPERVISION_HOST_POLL (1).
+# successor cycle may take to verify), FM_SUPERVISION_HOST_DIGEST_SECONDS
+# (1800: how long a digest outcome may wait for a drain), FM_SUPERVISION_HOST_POLL (1).
 # Park duration uses Bash's process-relative SECONDS counter (including Bash
 # 3.2), while durable timestamps still use epoch time. This is not a portable
 # monotonic-clock guarantee. Arm exit probes use ordinary 0.5-second child
@@ -220,6 +231,9 @@ TURN_TIMEOUT=$(numeric_or "${FM_SUPERVISION_HOST_TURN_TIMEOUT:-}" 1200)
 ROTATE_TURNS=$(numeric_or "${FM_SUPERVISION_HOST_ROTATE_TURNS:-}" 20)
 READY_TIMEOUT=$(numeric_or "${FM_SUPERVISION_HOST_READY_TIMEOUT:-}" 25)
 POLL=$(numeric_or "${FM_SUPERVISION_HOST_POLL:-}" 1)
+DIGEST_SECONDS=$(numeric_or "${FM_SUPERVISION_HOST_DIGEST_SECONDS:-}" 1800)
+DIGEST_DUE=
+DIGEST_SEQS=
 COOLDOWN=$FM_SUPERVISION_HOST_COOLDOWN
 COOLDOWN_MAX=3600
 AUTOARM_GEN=${FM_SUPERVISION_HOST_AUTOARM_GEN:-}
@@ -501,10 +515,9 @@ turn_crosses_boundary() {
   [ $((PARK_ELAPSED + TURN_TIMEOUT + ENGINE_GRACE)) -ge "$PARK_LIMIT" ]
 }
 
-# End the park at the boundary: stop the current and successor arms and this
-# home's watcher, print any close already read so main drains it, then the
-# boundary line.
-boundary_exit() {
+# End the park: stop the current and successor arms and this home's watcher,
+# print any close already read so main drains it, then the given line.
+park_exit() {  # <log-entry> <line>
   retire_arm "$ARM_PID" "$ARM_OUT"
   retire_arm "$SUCCESSOR_PID" "$SUCCESSOR_OUT"
   ARM_PID=
@@ -512,10 +525,51 @@ boundary_exit() {
   SUCCESSOR_PID=
   SUCCESSOR_OUT=
   "$SCRIPT_DIR/fm-watch-arm.sh" --stop >/dev/null 2>&1 || true
-  park_elapsed
-  log_line "boundary	after ${PARK_ELAPSED}s"
-  emit 'supervision-host: cycle boundary - the host ended its park at its bound; drain, acknowledge, and end the turn, and the next park starts on its own'
+  log_line "$1"
+  emit "$2"
   exit 0
+}
+
+boundary_exit() {
+  park_elapsed
+  park_exit "boundary	after ${PARK_ELAPSED}s" \
+    'supervision-host: cycle boundary - the host ended its park at its bound; drain, acknowledge, and end the turn, and the next park starts on its own'
+}
+
+# The digest deadline (THE DIGEST): DIGEST_DUE is the SECONDS value at which
+# the oldest unpresented digest row turns due, or empty when none waits, and
+# DIGEST_SEQS names the waiting rows. A store that cannot be read leaves no
+# deadline; main's next drain reports that store itself.
+digest_refresh() {
+  local pending oldest now
+  DIGEST_DUE=
+  DIGEST_SEQS=
+  [ -s "$STATE/branch-outcomes.jsonl" ] || return 0
+  if ! pending=$("$SCRIPT_DIR/fm-branch-outcome.sh" digest-pending 2>/dev/null); then
+    log_line "digest	the outcome store could not be read; no digest deadline"
+    return 0
+  fi
+  [ -n "$pending" ] || return 0
+  oldest=${pending%% *}
+  case "$oldest" in ''|*[!0-9]*) return 0 ;; esac
+  now=$(date +%s)
+  DIGEST_SEQS=${pending#* }
+  DIGEST_DUE=$((SECONDS + oldest + DIGEST_SECONDS - now))
+}
+
+# True when digest rows are due while the captain is attended. A drain main
+# ran since the deadline was computed may have presented them, so the store
+# is read again before the deadline is trusted.
+digest_due() {
+  [ -n "$DIGEST_DUE" ] && [ "$SECONDS" -ge "$DIGEST_DUE" ] || return 1
+  [ ! -e "$STATE/.afk" ] && ! fm_afk_contract_away_present "$STATE" || return 1
+  digest_refresh
+  [ -n "$DIGEST_DUE" ] && [ "$SECONDS" -ge "$DIGEST_DUE" ]
+}
+
+digest_exit() {
+  park_exit "digest	rows $DIGEST_SEQS" \
+    "supervision-host: branch-outcome: digest - the supervision session batched finished results for you (store rows ${DIGEST_SEQS//,/, }); run bin/fm-wake-drain.sh, tell the captain what matters from its BRANCH OUTCOMES, DIGEST section, acknowledge what it prints, and end the turn, and the next park starts on its own"
 }
 
 # Print the first cycle's status line once the arm has written it in full.
@@ -530,14 +584,15 @@ stream_ready_line() {
   READY_PENDING=0
 }
 
-# Wait for the current arm to close. Returns 0 with ARM_TEXT set,
-# or 1 when the park boundary arrives first.
+# Wait for the current arm to close. Returns 0 with ARM_TEXT set, 1 when the
+# park boundary arrives first, or 2 when the digest deadline does.
 await_close() {
   local i
   while fm_pid_alive "$ARM_PID"; do
     refresh_process "$ARM_PID"
     [ "$READY_PENDING" -eq 0 ] || stream_ready_line
     boundary_reached && return 1
+    digest_due && return 2
     # Probe the arm's exit twice a second between POLL-cadence checks, without
     # changing the outer identity refresh, readiness, or boundary cadence.
     i=$((POLL * 2))
@@ -1071,9 +1126,15 @@ fi || { echo "watcher: FAILED - the supervision host could not start a watcher c
 ARM_PID=$STARTED_ARM_PID
 ARM_OUT=$STARTED_ARM_OUT
 
+digest_refresh
 while :; do
   boundary_reached && boundary_exit
-  await_close || boundary_exit
+  digest_due && digest_exit
+  await_close
+  case $? in
+    1) boundary_exit ;;
+    2) digest_exit ;;
+  esac
   REASON=$(printf '%s\n' "$ARM_TEXT" | grep -E '^(signal:|stale:|check:|heartbeat($|:))' || true)
 
   # The away daemon owns triage while its flag exists; the owner stands down.
@@ -1178,12 +1239,13 @@ while :; do
     CAPTAIN_SEQS=$(turn_captain_seqs "$LAST_TURN")
     if [ -n "$CAPTAIN_SEQS" ]; then
       ARM_TEXT=
-      exit_to_main "branch-outcome: the supervision session handled this wake and recorded captain outcomes for you (store rows $CAPTAIN_SEQS); run bin/fm-wake-drain.sh, act on its BRANCH OUTCOMES section, and acknowledge them as it prints" \
+      exit_to_main "branch-outcome: the supervision session handled this wake and recorded captain outcomes for you (store rows $CAPTAIN_SEQS); run bin/fm-wake-drain.sh, act on its BRANCH OUTCOMES section, including any batched digest it carries, and acknowledge them as it prints" \
         "$HEALTH_NOTE"
     fi
   fi
 
-  # Handled: park on the successor.
+  # Handled: park on the successor, with any digest row this turn recorded.
+  digest_refresh
   ARM_PID=$SUCCESSOR_PID
   ARM_OUT=$SUCCESSOR_OUT
   SUCCESSOR_PID=

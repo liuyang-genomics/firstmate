@@ -35,6 +35,7 @@ FAKE_CLAUDE="$FAKEBIN/claude"
 #   handle      drain, claim the task's lease, report, acknowledge, release
 #   captain     the same as handle, but report verdict captain naming the rows
 #               the drain presented
+#   digest      the same as handle, but report verdict digest
 #   hold-lease  the same, but leave the lease held (the host must release it)
 #   return      handle, but the captain returns (the record is archived) before
 #               the turn ends
@@ -93,9 +94,10 @@ task=$(sed -n 's/^tasks=//p' "$STATE/.supervision-host-turn" | awk '{ print $1 }
 [ -n "$task" ] || task=fleet
 verdict=routine
 [ "$mode" != go-away ] || verdict=captain
+[ "$mode" != digest ] || verdict=digest
 case "$mode" in
   fail) exit 3 ;;
-  handle|captain|captain-close-before-return|held|captain-held|hold-lease|return|return-silent|return-fail|return-fail-silent|return-many|return-lookup-fail|return-first|noack|emptyresult|go-away|relay)
+  handle|digest|captain|captain-close-before-return|held|captain-held|hold-lease|return|return-silent|return-fail|return-fail-silent|return-many|return-lookup-fail|return-first|noack|emptyresult|go-away|relay)
     case "$mode" in held|captain-held) read -r _ < "$FM_HOME/stub-release" ;; esac
     [ "$mode" != return-first ] || "$FM_REPO/bin/fm-afk-contract.sh" archive >> "$FM_HOME/engine-return.log" 2>&1
     [ "$mode" != go-away ] || "$FM_REPO/bin/fm-afk-contract.sh" enter --words 'gone mid-turn' >> "$FM_HOME/engine-return.log" 2>&1
@@ -999,6 +1001,90 @@ test_attended_captain_outcome_reaches_main_through_branch_outcomes() {
   drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
   assert_not_contains "$drained" "BRANCH OUTCOMES" "an acknowledged captain outcome must not be presented again"
   pass "host: an attended captain outcome wakes main once and stays in its drain until main acknowledges it"
+}
+
+test_attended_digest_outcome_reaches_main_once_at_its_deadline() {
+  local home drained
+  home=$(make_home attended-digest attended)
+  echo digest > "$home/stub-mode"
+  FM_SUPERVISION_HOST_DIGEST_SECONDS=4 start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "digest: the host never started a watcher cycle"
+  append_status "$home" 'published the chapter'
+  wait_until 250 handled_at_least "$home" 1 \
+    || fail "digest: the wake was not handled on the engine: $(cat "$home/state/.supervision-host.log")"
+  assert_grep '"verdict":"digest"' "$home/state/branch-outcomes.jsonl" "the engine's digest report did not reach the store"
+  assert_grep 'recorded seq 1 [digest]; MAIN receives it in its next drain or the next batched digest' "$home/engine-report.log" \
+    "an attended digest report must say it waits for the batched digest"
+  [ ! -s "$home/host.rc" ] || fail "a digest outcome woke main before its deadline: $(cat "$home/host.out")"
+  wait_until 150 host_exited "$home" || fail "digest: the deadline never woke main: $(cat "$home/state/.supervision-host.log")"
+  expect_code 0 "$(cat "$home/host.rc")" "a digest exit must exit 0 for the owner to deliver"
+  assert_re '^supervision-host: branch-outcome: digest - .*\(store rows 1\); run bin/fm-wake-drain.sh' "$home/host.out" \
+    "the digest exit must name its store rows and send main to its drain"
+  assert_no_re '^signal:' "$home/host.out" "the close the engine handled must not reach main with the digest"
+  assert_re '	digest	rows 1$' "$home/state/.supervision-host.log" "the ledger must record the digest exit"
+  watcher_live "$home" && fail "the host left its watcher running when it ended its park for the digest"
+
+  drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
+  assert_contains "$drained" "BRANCH OUTCOMES, DIGEST (finished results the supervision session batched for you" \
+    "main's drain must present the digest"
+  assert_contains "$drained" "[seq 1] demo: stub handled demo" "the digest must carry the outcome"
+  assert_not_contains "$drained" "mark-processed" "a digest outcome must ask for no outcome acknowledgement"
+  assert_not_contains "$drained" "BRANCH OUTCOMES, ROUTINE" "a digest outcome is not a routine note"
+  drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
+  assert_not_contains "$drained" "[seq 1]" "a digest outcome must be presented only once"
+  pass "host: an attended digest outcome stays off main until its deadline, then reaches main once"
+}
+
+test_a_drain_before_the_deadline_takes_the_digest_with_it() {
+  local home drained
+  home=$(make_home attended-digest-drained attended)
+  echo digest > "$home/stub-mode"
+  FM_SUPERVISION_HOST_DIGEST_SECONDS=3 start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "digest drained: the host never started a watcher cycle"
+  append_status "$home" 'research numbers ready'
+  wait_until 250 handled_at_least "$home" 1 \
+    || fail "digest drained: the wake was not handled: $(cat "$home/state/.supervision-host.log")"
+  drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
+  assert_contains "$drained" "[seq 1] demo: stub handled demo" "main's own drain must present the waiting digest"
+  wait_until 60 host_exited "$home" && fail "the host woke main for a digest main's drain already presented: $(cat "$home/host.out")"
+  watcher_live "$home" || fail "the host is not parked on a live successor after its digest was drained"
+  pass "host: a drain main runs before the deadline takes the digest, and the deadline then wakes nobody"
+}
+
+test_captain_outcome_carries_the_waiting_digest() {
+  local home drained
+  home=$(make_home attended-digest-captain attended)
+  echo digest > "$home/stub-mode"
+  start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "digest captain: the host never started a watcher cycle"
+  append_status "$home" 'uploaded chapter one'
+  wait_until 250 handled_at_least "$home" 1 \
+    || fail "digest captain: the digest wake was not handled: $(cat "$home/state/.supervision-host.log")"
+  [ ! -s "$home/host.rc" ] || fail "a digest outcome woke main at once: $(cat "$home/host.out")"
+  echo captain > "$home/stub-mode"
+  append_status "$home" 'ready for review'
+  wait_until 250 host_exited "$home" || fail "digest captain: the captain outcome did not wake main: $(cat "$home/state/.supervision-host.log")"
+  assert_re '^supervision-host: branch-outcome: .*\(store rows 2\); run bin/fm-wake-drain.sh' "$home/host.out" \
+    "the captain exit must name only its own captain row"
+  drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
+  assert_contains "$drained" "run bin/fm-branch-outcome.sh mark-processed --through 2" "the drain must present the captain outcome"
+  assert_contains "$drained" "BRANCH OUTCOMES, DIGEST (" "the captain wake's drain must flush the waiting digest"
+  assert_contains "$drained" "[seq 1] demo: stub handled demo" "the flushed digest must carry the earlier result"
+  pass "host: a captain outcome's drain flushes the digest waiting beside it"
+}
+
+test_digest_is_refused_while_the_captain_is_away() {
+  local home
+  home=$(make_home away-digest away)
+  echo digest > "$home/stub-mode"
+  start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "away digest: the host never started a watcher cycle"
+  append_status "$home" 'published while away'
+  wait_until 250 host_exited "$home" || fail "away digest: a turn without a valid report was not handed to main: $(cat "$home/state/.supervision-host.log")"
+  assert_grep 'digest is only for an attended wake' "$home/engine-report.log" "an away digest report must be refused"
+  [ ! -e "$home/state/branch-outcomes.jsonl" ] || fail "a refused digest report touched the outcome store"
+  assert_re '^supervision-host: the away session could not take this wake' "$home/host.out" "the unreported away wake must reach main"
+  pass "report: the digest verdict is refused while the captain is away, so away results stay captain outcomes"
 }
 
 test_captain_leaving_mid_turn_keeps_its_captain_outcome_for_the_return() {
@@ -3072,6 +3158,10 @@ test_dialog_bearing_files_are_owner_only
 test_undelivered_dialog_is_fed_again_on_the_next_turn
 test_attended_wake_with_an_unreadable_mirror_reaches_main
 test_away_wake_is_handled_on_the_engine_and_never_reaches_main
+test_attended_digest_outcome_reaches_main_once_at_its_deadline
+test_a_drain_before_the_deadline_takes_the_digest_with_it
+test_captain_outcome_carries_the_waiting_digest
+test_digest_is_refused_while_the_captain_is_away
 test_away_turn_without_a_report_hands_the_wake_to_main
 test_return_during_an_engine_turn_hands_its_outcomes_to_main
 test_silent_outcomes_are_not_relayed_when_the_captain_returns

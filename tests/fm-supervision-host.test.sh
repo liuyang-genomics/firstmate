@@ -1007,7 +1007,8 @@ test_attended_digest_outcome_reaches_main_once_at_its_deadline() {
   local home drained
   home=$(make_home attended-digest attended)
   echo digest > "$home/stub-mode"
-  FM_SUPERVISION_HOST_DIGEST_SECONDS=4 start_host "$home"
+  # Wide enough that a loaded machine still sees the turn end before the deadline.
+  FM_SUPERVISION_HOST_DIGEST_SECONDS=12 start_host "$home"
   wait_until 150 watcher_live "$home" || fail "digest: the host never started a watcher cycle"
   append_status "$home" 'published the chapter'
   wait_until 250 handled_at_least "$home" 1 \
@@ -1016,7 +1017,7 @@ test_attended_digest_outcome_reaches_main_once_at_its_deadline() {
   assert_grep 'recorded seq 1 [digest]; MAIN receives it in its next drain or the next batched digest' "$home/engine-report.log" \
     "an attended digest report must say it waits for the batched digest"
   [ ! -s "$home/host.rc" ] || fail "a digest outcome woke main before its deadline: $(cat "$home/host.out")"
-  wait_until 150 host_exited "$home" || fail "digest: the deadline never woke main: $(cat "$home/state/.supervision-host.log")"
+  wait_until 300 host_exited "$home" || fail "digest: the deadline never woke main: $(cat "$home/state/.supervision-host.log")"
   expect_code 0 "$(cat "$home/host.rc")" "a digest exit must exit 0 for the owner to deliver"
   assert_re '^supervision-host: branch-outcome: digest - .*\(store rows 1\); run bin/fm-wake-drain.sh' "$home/host.out" \
     "the digest exit must name its store rows and send main to its drain"
@@ -1039,14 +1040,15 @@ test_a_drain_before_the_deadline_takes_the_digest_with_it() {
   local home drained
   home=$(make_home attended-digest-drained attended)
   echo digest > "$home/stub-mode"
-  FM_SUPERVISION_HOST_DIGEST_SECONDS=3 start_host "$home"
+  FM_SUPERVISION_HOST_DIGEST_SECONDS=15 start_host "$home"
   wait_until 150 watcher_live "$home" || fail "digest drained: the host never started a watcher cycle"
   append_status "$home" 'research numbers ready'
   wait_until 250 handled_at_least "$home" 1 \
     || fail "digest drained: the wake was not handled: $(cat "$home/state/.supervision-host.log")"
   drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
   assert_contains "$drained" "[seq 1] demo: stub handled demo" "main's own drain must present the waiting digest"
-  wait_until 60 host_exited "$home" && fail "the host woke main for a digest main's drain already presented: $(cat "$home/host.out")"
+  # Past the deadline: the host must read the store again and find nothing due.
+  wait_until 200 host_exited "$home" && fail "the host woke main for a digest main's drain already presented: $(cat "$home/host.out")"
   watcher_live "$home" || fail "the host is not parked on a live successor after its digest was drained"
   pass "host: a drain main runs before the deadline takes the digest, and the deadline then wakes nobody"
 }

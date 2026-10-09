@@ -4955,11 +4955,11 @@ test_branch_dispatch_routes_secondmate_signal_by_new_span() {
   cp "$ROOT/.pi/extensions/lib/fm-branch-model-picker.ts" "$repo/.pi/extensions/lib/fm-branch-model-picker.ts"
   printf 'project=%s/projects/approved\nwindow=mate-window\nkind=secondmate\n' "$home" > "$home/state/mate.meta"
   printf 'project=%s/projects/approved\nwindow=crew-window\nkind=ship\n' "$home" > "$home/state/crew.meta"
-  LIB="$repo/.pi/extensions/lib/fm-branch-dispatch.ts" FM_HOME="$home" CLASSIFY_LIB="$ROOT/bin/fm-classify-lib.sh" \
+  LIB="$repo/.pi/extensions/lib/fm-branch-dispatch.ts" FM_HOME="$home" CLASSIFY_LIB="$ROOT/bin/fm-classify-lib.sh" WAKE_LIB="$ROOT/bin/fm-wake-lib.sh" \
     node --input-type=module > "$TMP_ROOT/node-output" 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 const { branchOfferForWake, scopeForUnreadWake } = await import(pathToFileURL(process.env.LIB).href);
 const state = `${process.env.FM_HOME}/state`;
@@ -5013,6 +5013,52 @@ expectRoute("keyed resolution of a never-open key", hold, "resolved [key=never-o
 expectRoute("resolution after a bare resolved word left the unkeyed decision open",
   "needs-decision: choose\nresolved\n", "resolved: answered\n", false);
 expectRoute("captain-held declaration", "working: history\n", "captain-held [key=parked]: deferred to Monday\n", false);
+
+// This home's own bookkeeping appends (an answer's resolved close, a
+// captain-held transfer) go through the real self-announced writer, which
+// records them in the home-owned append ledger. They never make a span
+// main-owned on their own; a worker's decision line beside them still does.
+function homeAppend(task, ...lines) {
+  execFileSync("bash", ["-c",
+    'FM_STATE_OVERRIDE="$1"; . "$2"; f="$1/$3.status"; shift 3; ' +
+    'fm_wake_status_append_self_announced "$FM_STATE_OVERRIDE" "$f" "$@" || [ $? -eq 1 ]',
+    "_", state, process.env.WAKE_LIB, task, ...lines]);
+}
+function expectHomeRoute(label, presented, homeLines, workerSpan, toBranch) {
+  stage("mate", presented, "");
+  rmSync(`${state}/.mate.home-appends`, { force: true });
+  homeAppend("mate", ...homeLines);
+  appendFileSync(`${state}/mate.status`, workerSpan);
+  const [pi, host] = verdicts();
+  if (pi !== toBranch || host !== toBranch) {
+    throw new Error(`${label}: expected ${toBranch ? "branch" : "main"}, got pi=${pi} host=${host}`);
+  }
+}
+const answer = "resolved [key=old-hold]: answered: go with option a";
+expectHomeRoute("this home's answer before a routine worker line", hold, [answer], "working: resuming on option a\n", true);
+expectHomeRoute("this home's answer before a worker line on the answered key", hold, [answer],
+  "done [key=old-hold]: option a shipped\n", true);
+expectHomeRoute("this home's captain-held transfer before a routine worker line", hold,
+  ["captain-held [key=old-hold]: tracked by sample-task"], "working: carrying on\n", true);
+expectHomeRoute("this home's answer beside a worker blocked line", hold, [answer], "blocked: cannot reach the forge\n", false);
+expectHomeRoute("this home's answer beside a worker line on another open key",
+  `${hold}needs-decision [key=other-call]: still open\n`, [answer], "working [key=other-call]: more evidence\n", false);
+expectHomeRoute("this home's answer beside a worker resolution of another open key",
+  `${hold}needs-decision [key=other-call]: still open\n`, [answer], "resolved [key=other-call]: cleared myself\n", false);
+
+// A worker-written resolution is not this home's, and a ledger for another
+// file identity or a missing ledger proves nothing, so those stay on main.
+expectHomeRoute("a worker's own resolution after this home's routine append", hold,
+  ["note: sample bookkeeping"], "resolved [key=old-hold]: cleared it myself\n", false);
+stage("mate", hold, "");
+homeAppend("mate", answer);
+appendFileSync(`${state}/mate.status`, "working: resuming\n");
+if (!verdicts().every(Boolean)) throw new Error("the recorded answer did not leave the routine span to the branch");
+const ledger = `${state}/.mate.home-appends`;
+writeFileSync(ledger, readFileSync(ledger, "utf8").replace(/^ident=.*$/m, "ident=weak:0:0"));
+if (verdicts().some(Boolean)) throw new Error("a ledger for another file identity still proved this home's answer");
+rmSync(ledger);
+if (verdicts().some(Boolean)) throw new Error("a missing ledger still proved this home's answer");
 
 // The host decides the whole close through the offer rule, which must agree.
 stage("mate", hold, "done: sample-c PR merged\n");

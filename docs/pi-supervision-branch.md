@@ -119,6 +119,8 @@ A second mate's status log is one shared channel carrying many independently key
 The row is excluded when one of those lines is a decision, blocked, or captain-held line, resolves a decision open just before it, or declares, in the status parser's key positions, the key of a decision still open in that log.
 A resolution that closes nothing, key-less beside only keyed decisions or keyed for a key never open, stays routine.
 A key-less line otherwise falls back to its verb; an unrelated open decision alone leaves a routine span eligible, while a mixed span goes wholly to main.
+A line this home recorded as its own bookkeeping append (an answer's `resolved` close, a pending-reply close, or a `captain-held` transfer, all in the home-owned append ledger `bin/fm-classify-lib.sh` owns) still folds into the open decisions but never makes the span main-owned, so a worker's routine reply to an answered decision reaches the branch while any worker-written decision line beside it still sends the span to main.
+A missing, unreadable, or mismatched ledger proves no line is this home's own.
 The status-presentation cursor bounds that span, and a missing or unmatched cursor falls back to the whole log.
 Single-task crewmate signals keep their existing Pi payload and attended-host whole-log rules, except that the TypeScript decision fold now ignores bare transition words without a colon or complete key token, matching `bin/fm-classify-lib.sh` on both crewmate and second-mate logs.
 
@@ -649,7 +651,7 @@ At that moment the branch reports any refusal instead of concluding there is "no
 - Post-construction provider-error and no-report fallback, the consecutive-error latch, cooldown probe, exponential backoff, report-plus-settlement recovery, and report-before-error re-latch.
 - Cache key, and model and effort selection.
 - In `test_branch_dispatch_classifies_main_only_rows_and_writes_the_eligible_snapshot`: decision-owned signal and stale rows' exclusion from `eligibleSeqs`, their presence in `needsDecisionKeys`, task alias resolution, reserved-key configuration, status-log race and symlink refusal, non-vetoing behavior for unrelated eligible rows, and decision-only queues reading as ordinary main-only absence.
-- In `test_branch_dispatch_routes_secondmate_signal_by_new_span`: second-mate signal routing by new span on the Pi and attended-host paths, including an unrelated open hold, mixed, same-key, stamped-key, key-less blocked, and resolution spans, the whole-log fallback, stale-row isolation, and crewmate routing.
+- In `test_branch_dispatch_routes_secondmate_signal_by_new_span`: second-mate signal routing by new span on the Pi and attended-host paths, including an unrelated open hold, mixed, same-key, stamped-key, key-less blocked, and resolution spans, this home's own ledger-recorded appends beside routine and decision worker lines, the whole-log fallback, stale-row isolation, and crewmate routing.
 
 `tests/fm-branch-supervision.test.sh` covers:
 

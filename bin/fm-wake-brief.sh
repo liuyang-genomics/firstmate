@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fm-wake-brief.sh - drain the wake queue and print a compact brief of it,
-# written by one cheap-model call, so a handling turn reads a few lines instead
+# written by one model call (Haiku or Sonnet), so a handling turn reads a few lines instead
 # of the raw drain plus every status log and report it points at.
 #
 # Usage:
@@ -39,8 +39,12 @@
 #     files the rows or drain sections reference that live under
 #     $FM_HOME/data/, each cut to 6000 bytes.
 #
-# Model: `claude -p` with claude-haiku-4-5-20251001, then Sonnet when Haiku
-# fails or returns an unusable brief. Never Fable or Opus. It runs from an
+# Model choice is deterministic, made by this script before any call: Haiku
+# (claude-haiku-4-5-20251001) only when every queued row is mechanical, that is
+# no row is forced to `decision needed: y` by the Safety rule above; Sonnet
+# then backs up a failed or unusable Haiku brief. When any row is forced to y
+# the whole brief is written by Sonnet alone, with the raw drain as its only
+# fallback. Never Fable or Opus. The model runs from an
 # empty scratch directory with no setting sources, tools, MCP servers, or
 # session persistence, so no project or user hook fires and no tool can act.
 # FM_WAKE_BRIEF_CLAUDE names the claude binary (default `claude`; tests stub
@@ -67,7 +71,6 @@ TIMEOUT=${FM_WAKE_BRIEF_TIMEOUT:-90}
 case "$TIMEOUT" in ''|*[!0-9]*|0) TIMEOUT=90 ;; esac
 STATUS_LINES=${FM_WAKE_BRIEF_STATUS_LINES:-3}
 case "$STATUS_LINES" in ''|*[!0-9]*|0) STATUS_LINES=3 ;; esac
-MODELS="claude-haiku-4-5-20251001 sonnet"
 REPORT_MAX_BYTES=6000
 REPORT_MAX_COUNT=3
 MUST_FLAG_RE='needs-decision|blocked|fail|error|credential|login|auth|ask-user|review|merge|conflict|stuck|captain|report|https://[^[:space:]]+/pull/[0-9]+'
@@ -173,6 +176,13 @@ S<n> | <what happened and what the supervisor must do, at most 25 words> | decis
 Use y when the event needs a decision, approval, review, merge, credential, or unblocking, or reports a failure, a blocker, a review-ready PR, or a finished report; otherwise n. When an EVENT says required-decision=y, answer y.
 Keep every PR URL, task name, and decision key that matters, verbatim. Summarize a referenced report in the same line.
 Never write commands, acknowledgements, headings, blank lines, code fences, or any other text.'
+
+# Haiku only for an all-mechanical queue; any decision-bearing row means Sonnet.
+if awk -F '\t' '$4 == "y" { found = 1 } END { exit !found }' "$WORK/facts"; then
+  MODELS="sonnet"
+else
+  MODELS="claude-haiku-4-5-20251001 sonnet"
+fi
 
 mkdir "$WORK/cwd" || raw_fallback "could not create the model scratch directory"
 

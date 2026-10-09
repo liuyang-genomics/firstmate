@@ -48,18 +48,24 @@ SH
 chmod +x "$STUB"
 export FM_WAKE_BRIEF_CLAUDE="$STUB"
 
-# make_home <name>: a home with one needs-decision signal and one heartbeat
-# queued, primed so the decision line is unread. Echoes the home.
+# make_home <name> [mechanical]: a home with one needs-decision signal (or,
+# with `mechanical`, one routine working signal) and one heartbeat queued,
+# primed so the signalled line is unread. Echoes the home.
 make_home() {
-  local home
+  local home line=needs-decision
   home=$(make_case "$1")
   mkdir -p "$home/config"
   : > "$home/config/supervision-host-off"
   printf 'working [at=1]: setup\n' > "$home/state/t1.status"
   FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$DRAIN" >/dev/null 2>&1 \
     || fail "fixture: priming drain failed"
-  printf 'needs-decision [at=2] [key=k1]: pick A or B\n' >> "$home/state/t1.status"
-  append_wake "$home/state" signal "$home/state/t1.status" needs-decision
+  if [ "${2:-}" = mechanical ]; then
+    line=working
+    printf 'working [at=2]: running the unit suite\n' >> "$home/state/t1.status"
+  else
+    printf 'needs-decision [at=2] [key=k1]: pick A or B\n' >> "$home/state/t1.status"
+  fi
+  append_wake "$home/state" signal "$home/state/t1.status" "$line"
   append_wake "$home/state" heartbeat hb heartbeat
   printf '%s\n' "$home"
 }
@@ -83,7 +89,7 @@ test_brief_condenses_rows_and_copies_the_ack_command() {
   expect_code 0 "$rc" "brief"
   out=$(cat "$home/out")
   err=$(cat "$home/err")
-  assert_contains "$out" "condensed by claude-haiku-4-5-20251001" "the header must name the model that wrote the brief"
+  assert_contains "$out" "condensed by sonnet" "a queue with a decision row must be condensed by Sonnet"
   assert_contains "$out" "#1 signal t1: stub summary 1 | decision needed: y" \
     "a needs-decision row must say decision needed y even when the model said n"
   assert_contains "$out" "#2 heartbeat fleet: stub summary 2 | decision needed: n" "a heartbeat row keeps the model's n"
@@ -97,7 +103,8 @@ test_brief_condenses_rows_and_copies_the_ack_command() {
   assert_not_contains "$err" "raw drain output follows" "a valid brief must not fall back"
   assert_contains "$(cat "$home/stub.log")" '--setting-sources  --tools  --strict-mcp-config --no-session-persistence' \
     "the model must run with no setting sources, tools, MCP servers, or session persistence"
-  expect_code 1 "$(awk 'END { print NR }' "$home/stub.log")" "one Haiku call"
+  expect_code 1 "$(awk 'END { print NR }' "$home/stub.log")" "one Sonnet call"
+  assert_no_grep "claude-haiku" "$home/stub.log" "a queue with a decision row must never reach Haiku"
 
   # The extracted command is the real acknowledgement: running it consumes the rows.
   expect_code 2 "$(queued_rows "$home")" "the brief must leave the presented rows queued until acknowledged"
@@ -107,9 +114,22 @@ test_brief_condenses_rows_and_copies_the_ack_command() {
   pass "brief: one line per row, forced decision flag, verbatim OPEN DECISIONS and working ack command"
 }
 
+test_mechanical_queue_uses_haiku_only() {
+  local home rc
+  home=$(make_home haiku mechanical)
+  run_brief "$home" "$home/out" "$home/err"
+  rc=$?
+  expect_code 0 "$rc" "brief"
+  assert_contains "$(cat "$home/out")" "condensed by claude-haiku-4-5-20251001" "an all-mechanical queue must be condensed by Haiku"
+  assert_contains "$(cat "$home/out")" "#1 signal t1: stub summary 1 | decision needed: n" "a routine working row keeps the model's n"
+  expect_code 1 "$(awk 'END { print NR }' "$home/stub.log")" "one Haiku call"
+  assert_grep "--model claude-haiku-4-5-20251001" "$home/stub.log" "Haiku must write an all-mechanical brief"
+  pass "brief: an all-mechanical queue is condensed by Haiku alone"
+}
+
 test_haiku_failure_falls_back_to_sonnet() {
   local home rc
-  home=$(make_home sonnet)
+  home=$(make_home sonnet mechanical)
   run_brief "$home" "$home/out" "$home/err" STUB_MODE=fail STUB_MODE_SONNET=valid
   rc=$?
   expect_code 0 "$rc" "brief"
@@ -139,8 +159,14 @@ test_model_failures_fall_back_to_raw_drain_output() {
     run_brief "$home" "$home/out" "$home/err" STUB_MODE="$mode"
     expect_code 0 "$?" "brief with a $mode model"
     assert_raw_fallback "$home" "$mode"
-    expect_code 2 "$(awk 'END { print NR }' "$home/stub.log")" "a $mode model must be retried on Sonnet before the raw fallback"
+    expect_code 1 "$(awk 'END { print NR }' "$home/stub.log")" "a decision queue's failed Sonnet call must go straight to the raw fallback"
+    assert_no_grep "claude-haiku" "$home/stub.log" "a decision queue must not fall back to Haiku"
   done
+  home=$(make_home raw-mechanical mechanical)
+  run_brief "$home" "$home/out" "$home/err" STUB_MODE=fail
+  expect_code 0 "$?" "brief with a failing model on a mechanical queue"
+  assert_contains "$(cat "$home/err")" "raw drain output follows" "a mechanical queue must fall back to raw after Haiku and Sonnet fail"
+  expect_code 2 "$(awk 'END { print NR }' "$home/stub.log")" "a mechanical queue must try Haiku then Sonnet before the raw fallback"
   pass "brief: a failing, incomplete, or command-writing model falls back to the raw drain"
 }
 
@@ -203,6 +229,7 @@ test_mark_processed_command_is_copied_verbatim() {
 }
 
 test_brief_condenses_rows_and_copies_the_ack_command
+test_mechanical_queue_uses_haiku_only
 test_haiku_failure_falls_back_to_sonnet
 test_model_failures_fall_back_to_raw_drain_output
 test_model_timeout_falls_back_to_raw_drain_output

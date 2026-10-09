@@ -173,6 +173,12 @@ export interface UnreadWakeScope {
    * non-heartbeat wake claims it in the away posture.
    */
   heartbeatSeqs: string[];
+  /**
+   * True when the scan completed and left at least one row outside
+   * eligibleSeqs: a main-owned check, decision-owned, or unclaimed heartbeat
+   * row that only main's drain presents in this posture.
+   */
+  withheld: boolean;
   taskByWakeKey: Record<string, string>;
 }
 
@@ -186,6 +192,7 @@ const EMPTY_SCOPE: UnreadWakeScope = {
   needsDecisionKeys: [],
   checkSeqs: [],
   heartbeatSeqs: [],
+  withheld: false,
   taskByWakeKey: {},
 };
 const UNSAFE_SCOPE: UnreadWakeScope = {
@@ -198,6 +205,7 @@ const UNSAFE_SCOPE: UnreadWakeScope = {
   needsDecisionKeys: [],
   checkSeqs: [],
   heartbeatSeqs: [],
+  withheld: false,
   taskByWakeKey: {},
 };
 
@@ -679,6 +687,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
     needsDecisionKeys,
     checkSeqs,
     heartbeatSeqs,
+    withheld: eligibleSeqs.length < rows.length,
     taskByWakeKey: Object.fromEntries(taskByKey),
   };
 }
@@ -715,12 +724,21 @@ export interface BranchOfferVerdict {
 // row: until that row is read, a later signal or stale trigger for the same
 // task stays on main. Other tasks and heartbeat handling remain independent.
 //
+// The watcher's recovery re-announcement, "check: rearm-resurface"
+// (bin/fm-watch.sh resurface_after_downtime), is not a check event of its own:
+// it appends no row and stands for whatever the unread queue holds after a
+// cycle closed with no reader, such as a mate's routine reply that landed
+// while main was still handling a pass-through. It is judged by those rows
+// instead: the branch may take it only when every unread row is one the branch
+// may claim, so a resurfaced check or decision row still reaches main.
+//
 // The away posture collapses that partition: every actionable row is
 // branch-eligible and the trigger class no longer forces anything to main
 // (scopeForUnreadWake owns the per-row rule).
 export function branchOfferForWake(state: string, message: string, afk: boolean, attendedHost = false): BranchOfferVerdict {
   const heartbeat = /^heartbeat($|:)/.test(message);
-  const isCheckTrigger = /^check:/.test(message);
+  const isRecoveryResurface = message === "check: rearm-resurface";
+  const isCheckTrigger = /^check:/.test(message) && !isRecoveryResurface;
   const scope = scopeForUnreadWake(state, heartbeat, afk, attendedHost && !afk);
   const triggerKeys = /^signal:/.test(message)
     ? message
@@ -735,9 +753,9 @@ export function branchOfferForWake(state: string, message: string, afk: boolean,
     scope.taskByWakeKey[key] ?? scope.taskByWakeKey[key.replace(/^fm-/, "")] ?? key;
   const needsDecisionTasks = new Set(scope.needsDecisionKeys.map(taskIdentity));
   const isNeedsDecisionTrigger = triggerKeys.some((key) => needsDecisionTasks.has(taskIdentity(key)));
-  const attendedEligible = !isCheckTrigger && !isNeedsDecisionTrigger && (
-    afk ? scopeForUnreadWake(state, heartbeat, false).eligible : scope.eligible
-  );
+  const attendedScope = afk ? scopeForUnreadWake(state, heartbeat, false) : scope;
+  const attendedEligible = !isCheckTrigger && !isNeedsDecisionTrigger && attendedScope.eligible
+    && !(isRecoveryResurface && attendedScope.withheld);
   const eligible = afk ? scope.eligible : attendedEligible;
   return { scope, heartbeat, eligible, awayOnly: Boolean(eligible && !attendedEligible) };
 }

@@ -1672,6 +1672,79 @@ test_pass_through_successor_survives_the_hook_process_group_teardown() {
   pass "host+hook: the successor a pass-through leaves for main survives the hook's process group teardown"
 }
 
+# The live cost (2026-10-08): the successor a main-only pass-through leaves
+# for main closes on the mate's reply to main's own steer while main's turn is
+# still running, with no reader. The next park's first cycle then announced
+# "check: rearm-resurface", and every check close went to main, so a mate's
+# routine reply cost main a whole extra turn. That resurface is judged by its
+# queued rows: routine rows go to the engine, while a decision row still
+# reaches main.
+# A main-only pass-through in <home>, then main's handling turn, during which
+# the left successor closes on the status lines <status-lines> appends; main
+# acknowledges only what its first drain showed, and its turn ends.
+resurface_after_a_reply_during_main_turn() {  # <home> <status-lines>
+  local home=$1 successor
+  ln -s "$ROOT/.agents" "$home/.agents"
+  start_hook_session "$home"
+  turn_end "$home"
+  wait_until 150 watcher_live "$home" || fail "resurface: the Stop hook never started a watcher cycle: $(cat "$home/hook.err" 2>/dev/null)"
+  append_status "$home" 'which export format?' needs-decision
+  wait_until 250 hook_exited "$home" || fail "resurface: the decision close never reached the Stop hook: $(cat "$home/state/.supervision-host.log")"
+  assert_re '	pass-through	attended	main-only	signal:' "$home/state/.supervision-host.log" "fixture: the close was not a main-only pass-through"
+  assert_rewoke_main "$home" "resurface (pass-through)"
+  successor=$(cat "$home/state/.watch.lock/pid")
+  main_drain "$home" >/dev/null
+  "$2" "$home"
+  wait_until 250 bash -c '! kill -0 "$1" 2>/dev/null' _ "$successor" || fail "fixture: the successor did not close on the reply"
+  # shellcheck disable=SC2086 # the printed acknowledgement arguments
+  FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" "$@" >/dev/null 2>&1' "$ROOT/bin/fm-wake-drain.sh" $MAIN_ACK \
+    || fail "resurface: main's acknowledgement failed: $MAIN_ACK"
+  grep -q '	signal	demo.status	' "$home/state/.wake-queue" || fail "fixture: the reply was not left queued for the next park"
+  turn_end "$home"
+}
+
+routine_reply() {
+  append_status "$1" 'answered: mp4' resolved
+  append_status "$1" 'exporting mp4'
+}
+
+test_routine_reply_resurfaced_after_a_pass_through_is_handled_off_main() {
+  local home
+  home=$(make_primary_home hook-resurface-routine)
+  resurface_after_a_reply_during_main_turn "$home" routine_reply
+  wait_until 250 handled_at_least "$home" 1 \
+    || fail "resurface routine: the engine did not handle the resurfaced reply: $(cat "$home/state/.supervision-host.log"; cat "$home/hook.err" 2>/dev/null)"
+  assert_re '	handled	turn=[^	]*	posture=attended	.*check: rearm-resurface' "$home/state/.supervision-host.log" \
+    "resurface routine: the ledger must record the resurface handled on the engine"
+  assert_no_re 'pass-through	attended	main-only	check: rearm-resurface' "$home/state/.supervision-host.log" \
+    "resurface routine: the resurface still went to main"
+  assert_no_grep '	signal	demo.status	' "$home/state/.wake-queue" "resurface routine: the engine did not consume the resurfaced rows"
+  sleep 1
+  ! hook_exited "$home" || fail "resurface routine: a routine resurfaced reply woke main: $(cat "$home/hook.err")"
+  watcher_live "$home" || fail "resurface routine: the host is not parked on a live successor"
+  stop_home_processes "$home"
+  pass "host+hook: a routine reply resurfaced after a pass-through is handled on the engine, off main"
+}
+
+decision_reply() {
+  append_status "$1" 'which region?' needs-decision
+}
+
+test_decision_resurfaced_after_a_pass_through_still_reaches_main() {
+  local home
+  home=$(make_primary_home hook-resurface-decision)
+  resurface_after_a_reply_during_main_turn "$home" decision_reply
+  wait_until 250 hook_exited "$home" || fail "resurface decision: the resurface never reached main: $(cat "$home/state/.supervision-host.log")"
+  assert_rewoke_main "$home" "resurface decision"
+  assert_re '^check: rearm-resurface' "$home/hook.err" "resurface decision: main must receive the resurface"
+  assert_re '	pass-through	attended	main-only	check: rearm-resurface' "$home/state/.supervision-host.log" \
+    "resurface decision: the resurface carrying a decision must stay main's"
+  [ ! -e "$home/engine-call.1" ] || fail "resurface decision: the engine ran on a resurfaced decision"
+  assert_contains "$(main_drain "$home")" 'which region?' "resurface decision: main's drain must present the decision"
+  stop_home_processes "$home"
+  pass "host+hook: a decision resurfaced after a pass-through still reaches main"
+}
+
 # The arm processes running from <home>'s bin, one "<pid> <ppid>" per line.
 # A command substitution inside an arm is a forked copy that shows the same
 # command line, so a process whose parent is itself an arm is not counted.
@@ -2052,9 +2125,13 @@ SH
   kill -TERM "$(awk -F '\t' '$1 == "host" { print $2 }' "$home/state/.supervision-host")"
   wait_until 200 host_exited "$home" || fail "mirror boundary: the host did not stop mid-turn on TERM"
   echo handle > "$home/stub-mode"
-  park_after_stop "$home"
-  append_status "$home" 'handled after the stop'
+  # The stopped turn left its routine row queued, so the next park's
+  # resurface carries that row to the engine rather than to main.
+  rm -f "$home/host.rc"
+  : > "$home/park.go"
   wait_until 250 handled_at_least "$home" 3 || fail "mirror boundary: the wake after the stop was not handled: $(cat "$home/state/.supervision-host.log")"
+  assert_re '	handled	.*check: rearm-resurface$' "$home/state/.supervision-host.log" \
+    "mirror boundary: the stopped turn's resurfaced row was not handled on the engine"
   third="$home/engine-call.4"
   assert_re '^arg=--resume$' "$third" "fixture: the turn after the stop did not resume the conversation"
   assert_re '^\[captain\] third ask, turn stopped$' "$third" "dialog of a turn stopped before its report must reach the next turn"
@@ -3151,6 +3228,8 @@ test_successor_left_at_the_turn_survives_the_hook_process_group_teardown
 test_claude_stop_hook_notifies_when_at_turn_downtime_write_fails
 test_successor_close_during_main_turn_is_delivered_at_the_next_turn_end
 test_pass_through_successor_survives_the_hook_process_group_teardown
+test_routine_reply_resurfaced_after_a_pass_through_is_handled_off_main
+test_decision_resurfaced_after_a_pass_through_still_reaches_main
 test_next_park_takes_over_the_cycle_a_pass_through_left_for_main
 test_a_park_stopped_mid_take_over_leaves_the_take_over_to_the_next_park
 test_unrecorded_successor_is_stopped_rather_than_left_for_main

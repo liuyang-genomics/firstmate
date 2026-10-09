@@ -5066,6 +5066,25 @@ if (!branchOfferForWake(state, `signal: ${state}/mate.status`, false, true).elig
   throw new Error("the attended-host offer kept a routine second-mate close on main behind an unrelated hold");
 }
 
+// The watcher's recovery re-announcement has no row of its own: it is judged
+// by the queue it resurfaces, on both paths, while a real check close is not.
+const resurface = (label, toBranch) => {
+  for (const attendedHost of [false, true]) {
+    if (branchOfferForWake(state, "check: rearm-resurface", false, attendedHost).eligible !== toBranch) {
+      throw new Error(`${label}: expected the resurface on ${toBranch ? "the branch" : "main"} (attendedHost=${attendedHost})`);
+    }
+  }
+};
+stage("mate", hold, "done: sample-r PR merged\n");
+resurface("resurfaced routine row", true);
+if (branchOfferForWake(state, "check: merged-pr", false, true).eligible) {
+  throw new Error("a check close was offered because its queue held a routine row");
+}
+appendFileSync(`${state}/.wake-queue`, "\n1\t2\tcheck\tpr-poll\tcheck: merged-pr");
+resurface("resurfaced routine row beside a check row", false);
+stage("mate", hold, "needs-decision [key=new-call]: pick an option\n");
+resurface("resurfaced decision row", false);
+
 // Without a readable cursor the whole log is the span, so routing falls back
 // toward main rather than guessing.
 stage("mate", hold, "done: sample-d PR merged\n");

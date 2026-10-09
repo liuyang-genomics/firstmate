@@ -77,6 +77,7 @@ case "$PRESENTATION_LOCK_TIMEOUT" in ''|*[!0-9]*|0) PRESENTATION_LOCK_TIMEOUT=10
 ACTOR=$(fm_lease_actor) || exit 2
 ELIGIBLE_ROWS_FILE="$STATE/.branch-eligible-rows"
 ELIGIBLE_OWNER_FILE="$STATE/.branch-eligible-owner"
+SPENT_ROWS_FILE="$STATE/.branch-eligible-spent"
 MAIN_ROWS_FILE="$STATE/.main-eligible-rows"
 
 rows_file_valid() { fm_wake_grant_rows_valid "$1"; }
@@ -84,7 +85,7 @@ rows_file_valid() { fm_wake_grant_rows_valid "$1"; }
 # rotate_scratch_locked: remove scratch a dead drain left behind (header).
 rotate_scratch_locked() {
   local scratch
-  for scratch in "$STATE"/.main-eligible-rows.tmp.* "$STATE"/.wake-rows.consume.* \
+  for scratch in "$STATE"/.main-eligible-rows.tmp.* "$STATE"/.branch-eligible-spent.tmp.* "$STATE"/.wake-rows.consume.* \
     "$STATE"/.wake-queue.retire.* "$STATE"/.wake-queue.ack.* "$STATE"/.wake-queue.actor-view.*; do
     [ -e "$scratch" ] || [ -L "$scratch" ] || continue
     rm -f -- "$scratch"
@@ -94,7 +95,7 @@ rotate_scratch_locked() {
 reclaim_stale_branch_grant_locked() {
   [ -e "$ELIGIBLE_ROWS_FILE" ] || [ -L "$ELIGIBLE_ROWS_FILE" ] || return 0
   if ! fm_wake_branch_grant_live "$ELIGIBLE_ROWS_FILE" "$ELIGIBLE_OWNER_FILE"; then
-    rm -f -- "$ELIGIBLE_ROWS_FILE" "$ELIGIBLE_OWNER_FILE"
+    rm -f -- "$ELIGIBLE_ROWS_FILE" "$SPENT_ROWS_FILE" "$ELIGIBLE_OWNER_FILE"
   fi
 }
 
@@ -197,11 +198,41 @@ consume_actor_rows_locked() { # <rows-file> <cutoff>
 # missing or empty file here means this ran outside that handoff - a wiring
 # bug, never "nothing eligible" - and must fail loudly rather than silently
 # draining or acking nothing.
+# The one exception is a branch whose own acknowledgement already consumed the
+# whole grant (which removes the snapshot) and that drains or acknowledges
+# again before its turn ends: SPENT_ROWS_FILE names those rows while the
+# granting owner is still live, so the repeat is told the rows are already
+# acknowledged and exits 0 having presented and consumed nothing.
 require_branch_eligible_rows() {
-  rows_file_valid "$ELIGIBLE_ROWS_FILE" || {
-    echo "wake drain: no branch-eligible row snapshot at $ELIGIBLE_ROWS_FILE; refusing to guess what this actor may consume" >&2
+  rows_file_valid "$ELIGIBLE_ROWS_FILE" && return 0
+  if [ "$ACTOR" = branch ] && [ ! -e "$ELIGIBLE_ROWS_FILE" ] && [ ! -L "$ELIGIBLE_ROWS_FILE" ] \
+    && rows_file_valid "$SPENT_ROWS_FILE" 2>/dev/null \
+    && fm_wake_branch_owner_matches "$ELIGIBLE_OWNER_FILE"; then
+    printf 'wake drain: this turn'"'"'s granted wake row(s) %s were already acknowledged; nothing is left for this actor to drain or acknowledge, so do not run --ack-through again\n' \
+      "$(awk 'NF { printf "%s%s", sep, $1; sep = " " }' "$SPENT_ROWS_FILE")" >&2
+    exit 0
+  fi
+  echo "wake drain: no branch-eligible row snapshot at $ELIGIBLE_ROWS_FILE; refusing to guess what this actor may consume" >&2
+  return 1
+}
+
+# record_spent_branch_rows_locked <cutoff>: add the granted rows this branch
+# acknowledgement consumes to SPENT_ROWS_FILE (see require_branch_eligible_rows).
+record_spent_branch_rows_locked() {
+  local tmp
+  tmp=$(mktemp "$STATE/.branch-eligible-spent.tmp.XXXXXX") || return 1
+  {
+    if rows_file_valid "$SPENT_ROWS_FILE" 2>/dev/null; then cat "$SPENT_ROWS_FILE"; fi
+    awk -v cutoff="$1" '$1 ~ /^[0-9]+$/ && $1 <= cutoff { print $1 }' "$ELIGIBLE_ROWS_FILE"
+  } | sort -n -u > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  if [ ! -s "$tmp" ]; then
+    rm -f -- "$tmp"
+    return 0
+  fi
+  if ! chmod 0600 "$tmp" || ! _fm_atomic_replace "$tmp" "$SPENT_ROWS_FILE"; then
+    rm -f -- "$tmp"
     return 1
-  }
+  fi
 }
 
 # The highest sequence this actor has already been presented: the branch's
@@ -970,6 +1001,7 @@ if [ -n "$ACK_THROUGH" ]; then
   fi
   DRAIN_TMP=
   if [ "$ACTOR" = branch ]; then
+    record_spent_branch_rows_locked "$ACK_THROUGH" || exit 1
     consume_actor_rows_locked "$ELIGIBLE_ROWS_FILE" "$ACK_THROUGH" || exit 1
   else
     consume_actor_rows_locked "$MAIN_ROWS_FILE" "$ACK_THROUGH" || exit 1

@@ -1483,7 +1483,8 @@ families_for_changed_path() {
       printf '%s\n' real-herdr-gated
       ;;
     bin/fm-supervision-host.sh|bin/fm-supervision-engine-lib.sh|\
-    bin/fm-branch-report.sh|bin/fm-branch-dispatch.mjs)
+    bin/fm-branch-report.sh|bin/fm-branch-dispatch.mjs|\
+    bin/fm-branch-dispatch-build.mjs|bin/fm-branch-dispatch-js/*)
       # The supervision host and its parts: its own suite and live guard, plus
       # the Claude Stop hook that runs it.
       printf '%s\n' afk

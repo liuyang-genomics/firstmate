@@ -376,19 +376,85 @@ function readPresentationCursor(state: string): Map<string, { ident: string; off
   }
 }
 
+// The byte ranges this home recorded as its own bookkeeping appends to a status
+// log (bin/fm-classify-lib.sh's "home-owned status-append ledger", which owns
+// the format), or none when the ledger is absent, unreadable, malformed, or
+// names another file identity. Any doubt therefore leaves every line foreign.
+function homeAppendsPath(statusPath: string): string {
+  const slash = statusPath.lastIndexOf("/");
+  return `${statusPath.slice(0, slash)}/.${statusPath.slice(slash + 1).replace(/\.status$/, "")}.home-appends`;
+}
+
+function homeOwnedRanges(ledger: string, ident: string | null): Array<[number, number]> {
+  if (!ident) return [];
+  let data: string;
+  try {
+    if (!lstatSync(ledger).isFile()) return [];
+    data = readFileSync(ledger, "utf8");
+  } catch {
+    return [];
+  }
+  const [version, identLine, ...rows] = data.split("\n");
+  if (version !== "v1" || identLine !== `ident=${ident}`) return [];
+  const ranges: Array<[number, number]> = [];
+  for (const row of rows) {
+    const match = row.match(/^([0-9]+)\t([0-9]+)$/);
+    if (match && Number(match[2]) > Number(match[1])) ranges.push([Number(match[1]), Number(match[2])]);
+  }
+  return ranges;
+}
+
+// status_home_appends_covers: walk the ascending ranges once, so a ledger
+// written out of order refuses to prove coverage.
+function homeOwnedCovers(ranges: ReadonlyArray<[number, number]>, start: number, end: number): boolean {
+  for (const [rangeStart, rangeEnd] of ranges) {
+    if (rangeStart > start) continue;
+    if (rangeEnd > start) start = rangeEnd;
+    if (start >= end) return true;
+  }
+  return start >= end;
+}
+
+interface SpanLine {
+  line: string;
+  homeOwned: boolean;
+}
+
+// The non-blank lines from spanOffset to the end of contents, each marked when
+// its bytes lie wholly inside this home's own recorded appends.
+function spanLines(contents: Buffer, spanOffset: number, ranges: ReadonlyArray<[number, number]>): SpanLine[] {
+  const lines: SpanLine[] = [];
+  let start = spanOffset;
+  while (start < contents.length) {
+    const newline = contents.indexOf(0x0a, start);
+    const end = newline < 0 ? contents.length : newline;
+    const line = contents.subarray(start, end).toString("utf8").replace(/\r$/, "");
+    if (/\S/.test(line)) lines.push({ line, homeOwned: ranges.length > 0 && homeOwnedCovers(ranges, start, end) });
+    start = end + 1;
+  }
+  return lines;
+}
+
 // Walk the presented span in order: a resolution must close a decision that
 // was open immediately before that line, not one opened later in the span.
+// A line this home appended itself (an answer's resolved close, a pending-reply
+// close, a captain-held transfer) is main's own bookkeeping, so it still folds
+// into the open decisions but never makes the span main-owned on its own.
 // docs/pi-supervision-branch.md owns the routing contract.
 function spanIsDecisionOwned(
   open: ReadonlyMap<string, string>,
   presented: readonly string[],
-  span: readonly string[],
+  span: readonly SpanLine[],
   resolveVerb: string,
   heldVerb: string,
   reservedPrefixes: readonly string[],
 ): boolean {
   const before = openDecisions(presented, resolveVerb, heldVerb, reservedPrefixes);
-  for (const line of span) {
+  for (const { line, homeOwned } of span) {
+    if (homeOwned) {
+      openDecisions([line], resolveVerb, heldVerb, reservedPrefixes, before);
+      continue;
+    }
     const verb = statusLineVerb(line);
     if (["needs-decision", "blocked", heldVerb].includes(verb)) return true;
     const resolved = verb === resolveVerb ? decisionKey(line) : null;
@@ -526,21 +592,38 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
             if (presentationCursor === undefined) presentationCursor = readPresentationCursor(state);
             cursor = presentationCursor?.get(task);
           }
-          const config = spanRule ? `${decisionConfig}\0${cursor?.ident ?? ""}\0${cursor?.offset ?? 0}` : decisionConfig;
+          // A span also depends on this home's append ledger, which is recorded
+          // just after the status bytes it covers.
+          let ledgerVersion: string | null = null;
+          if (spanRule) {
+            try {
+              ledgerVersion = statusFileVersion(homeAppendsPath(statusPath));
+            } catch {
+              ledgerVersion = "unreadable";
+            }
+          }
+          const config = spanRule
+            ? `${decisionConfig}\0${cursor?.ident ?? ""}\0${cursor?.offset ?? 0}\0${ledgerVersion ?? ""}`
+            : decisionConfig;
           const cached = staleDecisionCache.get(ownershipKey);
           if (cached?.version === version && cached.config === config) {
             decisionOwned = cached.decisionOwned;
           } else {
             let contents: Buffer;
             let spanOffset = 0;
+            let ident: string | null = null;
             try {
               contents = readFileSync(statusPath);
-              if (cursor && cursor.offset <= contents.length) {
+              if (spanRule) {
                 try {
-                  if (cursor.ident === statusFileIdentity(statusPath)) spanOffset = cursor.offset;
+                  ident = statusFileIdentity(statusPath);
                 } catch {
-                  // No identity to match: the span is the whole log.
+                  // No identity to match: the span is the whole log and no
+                  // line is provably this home's own.
                 }
+              }
+              if (cursor && cursor.offset <= contents.length && ident !== null && cursor.ident === ident) {
+                spanOffset = cursor.offset;
               }
               if (statusFileVersion(statusPath) !== version) return UNSAFE_SCOPE;
             } catch {
@@ -552,7 +635,7 @@ export function scopeForUnreadWake(state: string, heartbeat: boolean, afk = fals
               ? spanIsDecisionOwned(
                 open,
                 nonBlankLines(contents.subarray(0, spanOffset).toString("utf8")),
-                nonBlankLines(contents.subarray(spanOffset).toString("utf8")),
+                spanLines(contents, spanOffset, homeOwnedRanges(homeAppendsPath(statusPath), ident)),
                 resolveVerb,
                 heldVerb,
                 reservedPrefixes,

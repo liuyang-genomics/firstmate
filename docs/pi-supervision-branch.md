@@ -98,6 +98,7 @@ What is never offered, or falls back to main:
 
 - While attended, a check-kind triggering close is never offered, even when other rows are eligible.
   Check-kind closes are merge-confirmation polls, Relay mentions, credential/auth failures, and every other legitimately main-only class.
+- The watcher's recovery re-announcement, `check: rearm-resurface`, is the one `check:` close judged by its queue instead: it queues no row of its own, so it is offered only when every unread row is branch-eligible, and any main-only row keeps it on main.
 - When a triggering close has no acceptor (extension absent, branch broken), it keeps today's wake-to-main path.
 - Watcher-failure alarms always go to main, because only main can repair the watcher cycle.
 
@@ -651,7 +652,7 @@ At that moment the branch reports any refusal instead of concluding there is "no
 - Post-construction provider-error and no-report fallback, the consecutive-error latch, cooldown probe, exponential backoff, report-plus-settlement recovery, and report-before-error re-latch.
 - Cache key, and model and effort selection.
 - In `test_branch_dispatch_classifies_main_only_rows_and_writes_the_eligible_snapshot`: decision-owned signal and stale rows' exclusion from `eligibleSeqs`, their presence in `needsDecisionKeys`, task alias resolution, reserved-key configuration, status-log race and symlink refusal, non-vetoing behavior for unrelated eligible rows, and decision-only queues reading as ordinary main-only absence.
-- In `test_branch_dispatch_routes_secondmate_signal_by_new_span`: second-mate signal routing by new span on the Pi and attended-host paths, including an unrelated open hold, mixed, same-key, stamped-key, key-less blocked, and resolution spans, this home's own ledger-recorded appends beside routine and decision worker lines, the whole-log fallback, stale-row isolation, and crewmate routing.
+- In `test_branch_dispatch_routes_secondmate_signal_by_new_span`: second-mate signal routing by new span on the Pi and attended-host paths, including an unrelated open hold, mixed, same-key, stamped-key, key-less blocked, and resolution spans, this home's own ledger-recorded appends beside routine and decision worker lines, the whole-log fallback, stale-row isolation, crewmate routing, and the recovery re-announcement judged by its queued rows.
 
 `tests/fm-branch-supervision.test.sh` covers:
 

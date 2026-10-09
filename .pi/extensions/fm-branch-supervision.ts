@@ -486,12 +486,16 @@ function parseOutcomeRow(value: unknown): OutcomeRow | null {
   const row = value as Record<string, unknown>;
   if (typeof row.seq !== "number" || !Number.isSafeInteger(row.seq) || row.seq < 1) return null;
   if (typeof row.task !== "string" || !row.task) return null;
-  if (row.verdict !== "routine" && row.verdict !== "captain") return null;
+  if (row.verdict !== "routine" && row.verdict !== "captain" && row.verdict !== "digest") return null;
   if (typeof row.summary !== "string" || !row.summary) return null;
   if (row.silent !== undefined && typeof row.silent !== "boolean") return null;
   const silent = row.silent === true;
   if (silent && row.verdict !== "routine") return null;
-  return { seq: row.seq, task: row.task, verdict: row.verdict, summary: row.summary, silent };
+  // A digest row comes only from an attended supervision host
+  // (bin/fm-branch-outcome.sh); a home that switched to Pi presents it as the
+  // visible routine note it is: a finished result that needs no action.
+  const verdict: Verdict = row.verdict === "captain" ? "captain" : "routine";
+  return { seq: row.seq, task: row.task, verdict, summary: row.summary, silent };
 }
 
 function parseVisibleOutcomeRecord(value: unknown): VisibleOutcomeRecord | null {

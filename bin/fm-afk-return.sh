@@ -672,8 +672,8 @@ EOF
   # every safe actionable wake it could while main was parked; wakes it
   # declined still fell back to main. The captain rows are listed above.
   printf 'Handled while away:\n'
-  routine=$(printf '%s\n' "$STORE_ROWS" | awk -F '\t' '$3 == "routine" { n++ } END { print n + 0 }')
-  routine_visible=$(printf '%s\n' "$STORE_ROWS" | awk -F '\t' '$3 == "routine" && $6 != "true" { n++ } END { print n + 0 }')
+  routine=$(printf '%s\n' "$STORE_ROWS" | awk -F '\t' '$3 == "routine" || $3 == "digest" { n++ } END { print n + 0 }')
+  routine_visible=$(printf '%s\n' "$STORE_ROWS" | awk -F '\t' '($3 == "routine" || $3 == "digest") && $6 != "true" { n++ } END { print n + 0 }')
   captain=$(printf '%s\n' "$STORE_ROWS" | awk -F '\t' '$3 == "captain" { n++ } END { print n + 0 }')
   visible_outcomes=$((routine_visible + captain))
   printf '  %s outcome(s) handled by the away session (%s routine, %s escalated above)\n' "$((routine + captain))" "$routine" "$captain"
@@ -683,7 +683,7 @@ EOF
     printf '  visible outcomes %s\n' "$pointer"
   elif [ "$routine_visible" -gt 0 ]; then
     printf '  %s routine outcome(s) recorded; the latest visible:\n' "$routine"
-    printf '%s\n' "$STORE_ROWS" | awk -F '\t' '$3 == "routine" && $6 != "true" { printf "    - %s: %s\n", $2, $5 }' | tail -5
+    printf '%s\n' "$STORE_ROWS" | awk -F '\t' '($3 == "routine" || $3 == "digest") && $6 != "true" { printf "    - %s: %s\n", $2, $5 }' | tail -5
   elif [ "$routine" -gt 0 ]; then
     printf '  %s routine outcome(s) recorded; none were visible.\n' "$routine"
   else

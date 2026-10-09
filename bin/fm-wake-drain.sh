@@ -598,6 +598,12 @@ EOF
 #     check the task's current state first and reply to the captain only
 #     about outcomes still open, as if settled ones had never been listed,
 #     then acknowledge every presented outcome, settled and open alike.
+#   - Digest outcomes (finished, captain-visible results that need no action,
+#     batched by the attended host, docs/supervision-host.md "The digest") are
+#     listed once, oldest first, for main to relay what matters to the
+#     captain; a digest row past the section's byte cap is named by seq with
+#     the bin/fm-branch-outcome.sh lookup command that prints it, never
+#     dropped into a bare count, because the read cursor still passes it.
 #   - Visible routine outcomes are listed once, for awareness, the way the Pi
 #     branch's routine notes reach main's transcript without a turn; silent
 #     routine outcomes never appear. The newest visible rows that fit a byte
@@ -613,8 +619,9 @@ EOF
 # (bin/fm-afk-return.sh) keeps its catch-up gated instead of clearing over
 # outcomes a later drain would present again.
 print_branch_outcomes_section() {
-  local config rows through captain routine line seq task task_line target i
-  local text='' used=0 shown=0 held=0 bytes item_bytes=600 captain_bytes=4000 routine_bytes=2000
+  local config rows through captain routine digest line seq task task_line target i
+  local text='' used=0 shown=0 held=0 bytes item_bytes=600 captain_bytes=4000 routine_bytes=2000 digest_bytes=4000
+  local digest_lines='' digest_omitted=
   local routine_lines='' routine_count=0 routine_shown=0
   local -a captain_tasks=() captain_lines=() captain_line_bytes=()
   [ "$ACTOR" = main ] || return 0
@@ -640,6 +647,8 @@ print_branch_outcomes_section() {
       | .lines[]' 2>/dev/null) \
     || ! routine=$(printf '%s\n' "$rows" | jq -rs 'map(select(.unread and .verdict == "routine" and .silent != true)) | sort_by(.seq) | reverse | .[]
       | "[seq \(.seq)] \(.task): \(.summary | gsub("[\t\n\r]"; " "))"' 2>/dev/null) \
+    || ! digest=$(printf '%s\n' "$rows" | jq -rs 'map(select(.unread and .verdict == "digest")) | sort_by(.seq) | .[]
+      | "\(.seq)\t[seq \(.seq)] \(.task): \(.summary | gsub("[\t\n\r]"; " "))"' 2>/dev/null) \
     || case "$through" in ''|*[!0-9]*) true ;; *) false ;; esac; then
     printf 'BRANCH OUTCOMES SKIPPED: the outcome store could not be projected safely; nothing was marked read, so these outcomes are presented again on the next drain.\n' >&2
     return 1
@@ -680,6 +689,28 @@ ROWS
     [ "$held" -eq 0 ] || text="${text}BRANCH OUTCOMES: $held newer captain outcome(s) are held back (byte cap); they follow on the next drain once these are acknowledged
 "
     text="${text}BRANCH OUTCOMES: after processing them run bin/fm-branch-outcome.sh mark-processed --through $target; until then every drain presents them again
+"
+  fi
+
+  used=0
+  while IFS=$(printf '\t') read -r seq line; do
+    case "$seq" in ''|*[!0-9]*) continue ;; esac
+    cap_outcome_line "$line" $((item_bytes - 1))
+    bytes=$(( OUTCOME_LINE_BYTES + 1 ))
+    if [ -n "$digest_omitted" ] || [ $((used + bytes)) -gt "$digest_bytes" ]; then
+      digest_omitted=${digest_omitted:+$digest_omitted,}$seq
+      continue
+    fi
+    digest_lines="$digest_lines$OUTCOME_LINE
+"
+    used=$((used + bytes))
+  done <<ROWS
+$digest
+ROWS
+  if [ -n "$digest_lines" ]; then
+    text="${text}BRANCH OUTCOMES, DIGEST (finished results the supervision session batched for you, oldest first; nothing to acknowledge - check each task's current state and tell the captain what still matters, as one message):
+$digest_lines"
+    [ -z "$digest_omitted" ] || text="${text}BRANCH OUTCOMES, DIGEST: more results did not fit; read them with bin/fm-branch-outcome.sh lookup --seqs $digest_omitted
 "
   fi
 

@@ -93,6 +93,8 @@ Attended on the supervision host (no away-posture record, and the wake names the
 There, also report verdict captain for anything MAIN must act on to move the work forward, such as a local-only branch ready to land, a pull request ready to merge, or a step MAIN said it would take once the work was ready, even when the captain asked not to hear about that work; MAIN, not you, decides what the captain hears.
 A handoff you completed under a standing relay (below) is not such a step: it is verdict routine unless the same event carries something else this section makes captain.
 Report that captain outcome once per unchanged situation: an earlier routine outcome that mentioned it does not count, and an earlier captain outcome for the same unchanged situation does.
+There too, report verdict digest instead of captain for a finished, healthy result of requested work that needs no action from MAIN or the captain, such as a published upload, research numbers that were asked for, or a finished step of a requested redo; MAIN receives digest outcomes batched, within half an hour.
+Every other captain case above stays captain: a decision, failure, credential, review-ready PR, or anything MAIN must act on is never digest, and when in doubt between digest and captain, choose captain.
 Write summaries in the captain's outcome language - the project, the fix, the PR, the worker, the blocker - never internal mechanics like wake kinds, status prefixes, worktrees, or state file names.
 
 # Standing relays

@@ -139,6 +139,38 @@ PY
   pass "outcome store is append-only and refuses sequence reuse after a torn tail"
 }
 
+test_outcome_store_digest_rows_need_only_the_read_cursor() {
+  local home pending out status
+  home="$TMP_ROOT/store-digest-home"
+  mkdir -p "$home/state"
+  [ -z "$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" digest-pending)" ] \
+    || fail "digest-pending printed something for an empty store"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append --task task-1 --verdict digest --summary 'chapter one published' >/dev/null \
+    || fail "digest append failed"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append --task task-2 --verdict captain --summary 'PR ready' >/dev/null \
+    || fail "captain append failed"
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append --task task-3 --verdict digest --summary 'numbers ready' >/dev/null \
+    || fail "second digest append failed"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" append --task task-4 --verdict digest --summary 'x' --silent true 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "the store accepted a silent digest outcome"
+  pending=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" digest-pending) || fail "digest-pending failed"
+  case "$pending" in
+    [0-9]*' 1,3') ;;
+    *) fail "digest-pending did not name the oldest digest epoch and every unread digest row: $pending" ;;
+  esac
+  FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" mark-read --through 3 || fail "mark-read failed"
+  [ -z "$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" digest-pending)" ] \
+    || fail "a presented digest row is still pending"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" unprocessed) || fail "unprocessed failed"
+  assert_contains "$out" '"seq":2' "the captain row must stay unprocessed"
+  assert_not_contains "$out" '"verdict":"digest"' "a digest row must never wait for the processed marker"
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-branch-outcome.sh" mark-processed --through 3 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] || fail "mark-processed accepted a digest row as its target"
+  pass "outcome store: digest rows are visible, never silent, and consumed by the read cursor alone"
+}
+
 test_outcome_append_keeps_a_bounded_display_tail() {
   local home store tail cursor
   home="$TMP_ROOT/tail-home"
@@ -1542,6 +1574,7 @@ WRAPPER
 
 test_branch_prompt_is_byte_stable_and_above_cache_floor
 test_outcome_store_is_append_only_with_cursor_reads
+test_outcome_store_digest_rows_need_only_the_read_cursor
 test_outcome_append_keeps_a_bounded_display_tail
 test_outcome_tail_keeps_whole_newest_rows_within_its_byte_budget
 test_outcome_seed_tail_creates_only_an_absent_display_tail

@@ -5,11 +5,16 @@
 # CONTRACT (this header is the one owner of the store's format).
 #   - Store: $STATE/branch-outcomes.jsonl, strictly APPEND-ONLY. One JSON
 #     object per line: {"seq":N,"epoch":N,"task":"...","wake":"...",
-#     "verdict":"routine"|"captain","summary":"...","silent":true|false,
+#     "verdict":"routine"|"captain"|"digest","summary":"...","silent":true|false,
 #     "statusEndpoint":N,"statusIdent":"..."}. Legacy rows without `silent`
 #     or status provenance remain valid and are treated as visible. A silent
 #     row must have verdict `routine`; the branch prompt and delivery consumers
-#     own the additional no-change eligibility rule.
+#     own the additional no-change eligibility rule. A `digest` row is a
+#     finished, captain-visible result that needs no action, recorded only by
+#     an attended supervision-host turn (bin/fm-branch-report.sh); like a
+#     routine row it is consumed by the read cursor alone and never needs the
+#     processed marker, and a reader that predates it presents it as a
+#     visible routine note.
 #     Every read and append validates the complete log as a gap-free sequence;
 #     malformed, duplicate, or reordered rows fail closed.
 #     Existing lines are never rewritten, reordered, or deleted by any
@@ -76,11 +81,15 @@
 #     conversation memory.
 #
 # Usage:
-#   fm-branch-outcome.sh append --task <id> --verdict routine|captain \
+#   fm-branch-outcome.sh append --task <id> --verdict routine|captain|digest \
 #       --summary <text> [--wake <text>] [--silent true|false]
 #     Append one outcome record; prints the assigned seq.
 #   fm-branch-outcome.sh unread
 #     Print every unread record (raw JSONL). Exit 0 with no output when none.
+#   fm-branch-outcome.sh digest-pending
+#     Print "<epoch> <seq>,<seq>,..." - the oldest unread digest record's
+#     epoch and every unread digest seq - or nothing when none is unread; the
+#     supervision host's digest deadline reads it.
 #   fm-branch-outcome.sh mark-read --through <seq>
 #     Advance the cursor (never backwards) after Pi delivers the records or
 #     the host presents them in its drain.
@@ -163,7 +172,7 @@ RECORDED_AGO_JQ='def recorded_ago: ([$now - .epoch, 0] | max) as $s
     else "\($s / 86400 | floor)d" end;'
 
 usage() {
-  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain --summary <text> [--wake <text>] [--silent true|false] | unread | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
+  echo "usage: fm-branch-outcome.sh append --task <id> --verdict routine|captain|digest --summary <text> [--wake <text>] [--silent true|false] | unread | digest-pending | mark-read --through <seq> | unprocessed | mark-processed --through <seq> | present | processed-init [--held-lock] | list [--recent <n>] | lookup --seqs <n,...> | startup-replay | seed-tail" >&2
   exit 2
 }
 
@@ -249,7 +258,7 @@ last_seq() { # [<file> [<first expected seq, or null for a bounded suffix>]]
       and ((.seq | type) == "number" and .seq >= 1 and .seq <= 9007199254740991 and .seq == (.seq | floor))
       and ((.epoch | type) == "number" and .epoch >= 0 and .epoch == (.epoch | floor))
       and ((.task | type) == "string" and (.wake | type) == "string")
-      and ((.summary | type) == "string" and (.verdict == "routine" or .verdict == "captain"))
+      and ((.summary | type) == "string" and (.verdict == "routine" or .verdict == "captain" or .verdict == "digest"))
       and (.silent != true or .verdict == "routine");
     if endswith("\n") then split("\n")[:-1]
     else error("unterminated outcome store")
@@ -516,7 +525,7 @@ case "$CMD" in
     [ -n "$TASK" ] || usage
     outcome_index_path "$TASK" >/dev/null || usage
     [ -n "$SUMMARY" ] || usage
-    case "$VERDICT" in routine|captain) ;; *) usage ;; esac
+    case "$VERDICT" in routine|captain|digest) ;; *) usage ;; esac
     case "$SILENT" in true|false) ;; *) usage ;; esac
     if [ "$SILENT" = true ] && [ "$VERDICT" != routine ]; then
       echo "error: silent outcomes must have the routine verdict" >&2
@@ -564,6 +573,18 @@ case "$CMD" in
     fm_lock_acquire_wait "$LOCK"
     print_unread
     fm_lock_release "$LOCK"
+    ;;
+  digest-pending)
+    [ "$#" -eq 0 ] || usage
+    fm_lock_acquire_wait "$LOCK"
+    if ! UNREAD=$(print_unread); then
+      fm_lock_release "$LOCK"
+      exit 1
+    fi
+    fm_lock_release "$LOCK"
+    [ -n "$UNREAD" ] || exit 0
+    printf '%s\n' "$UNREAD" | jq -rs 'map(select(.verdict == "digest")) | sort_by(.seq)
+      | if length == 0 then empty else "\(.[0].epoch) \(map(.seq | tostring) | join(","))" end'
     ;;
   mark-read)
     [ "${1:-}" = --through ] || usage

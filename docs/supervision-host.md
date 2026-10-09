@@ -122,7 +122,7 @@ It also passes the close through unchanged, with no added line, when any of thes
 - The session is cooling down after engine errors; see [The broken-session latch](#the-broken-session-latch).
 
 A close the engine takes is handled as in [One wake](#one-wake), with the dialog mirror at the head of the wake message.
-A handled wake with only routine outcomes never reaches main.
+A handled wake with only routine or digest outcomes never reaches main; digest outcomes wait for [The digest](#the-digest).
 A handled wake that recorded a captain outcome while the captain is still attended exits with one `supervision-host: branch-outcome:` line naming its store rows, without the close it handled; see [Captain outcomes](#captain-outcomes).
 A turn that fails hands its close to main with one `supervision-host:` line, as away.
 Main-only rows that share the queue with the branch's rows stay queued for main, which is woken for each on its own triggering close, as on Pi.
@@ -208,6 +208,7 @@ The drain's header owns the section's bounds; these rules keep it bounded and in
 - Captain outcomes come first and never wait behind routine ones.
 - Repeated captain outcomes for one task collapse to that task's newest, naming how many it carries, and one acknowledgement covers them.
 - The byte cap shows only the oldest contiguous run of captain outcomes, so the printed acknowledgement covers exactly the rows shown, and it counts the newer ones it holds back, which follow once the run is acknowledged.
+- Digest outcomes follow the captain outcomes, listed once and oldest first under `BRANCH OUTCOMES, DIGEST` for main to relay what still matters, with nothing to acknowledge; rows past the digest byte cap are named by seq with the `bin/fm-branch-outcome.sh lookup` command that prints them, never collapsed into a bare count.
 - Routine outcomes never open a main turn: the next drain lists the newest visible one once, for awareness and with nothing to acknowledge, and collapses older visible routine notes into a count; silent routine outcomes never appear.
 
 The section runs only for main on a home that runs the host and whose primary is not Pi, and never while the away record exists.
@@ -224,6 +225,14 @@ Anything main must act on while attended to move the work forward, such as a loc
 
 One limit: if the captain goes away and returns while an attended engine turn runs, and the host is terminated before that turn's `branch-outcome` wake is delivered, no immediate wake reaches main.
 The captain row is still durable, and the next drain presents it until it is acknowledged.
+
+### The digest
+
+A finished, captain-visible result that needs no action from main or the captain, such as a published upload or requested research numbers, is a digest outcome on the attended host (`bin/fm-branch-prompt.sh` "Verdict: routine or captain" owns the rule, and "when in doubt, captain" still holds).
+It opens no main turn of its own: any drain main runs, including the one a captain outcome or a handed-back close causes, presents every digest outcome waiting with it.
+When the oldest digest outcome no drain has presented yet is `FM_SUPERVISION_HOST_DIGEST_SECONDS` old (default 1,800), the host ends its park as at [the park boundary](#at-the-boundary), with one `supervision-host: branch-outcome: digest` line naming the waiting rows, so several results reach main as one wake.
+The host checks that deadline on every loop pass and reads the store again before trusting it, so a digest main already drained wakes nobody.
+Away nothing changes: `bin/fm-branch-report.sh` refuses the digest verdict while an away record exists, so every result waits for the return brief as before, and an attended digest deadline waits until the return.
 
 ## Failure direction
 

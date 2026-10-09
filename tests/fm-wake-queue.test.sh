@@ -1521,6 +1521,68 @@ test_main_drain_excludes_rows_already_granted_to_branch() {
   pass "main drain and acknowledgement exclude an active branch grant"
 }
 
+# A branch turn that acknowledges its whole grant and then repeats the same
+# acknowledgement (a report refused on one line while the ack on the next line
+# succeeded, then both retried) must hear that its rows were already consumed,
+# not that no grant exists - while still consuming nothing it was not granted.
+test_branch_repeat_ack_after_spent_grant_reports_already_acknowledged() {
+  local dir state out err sequence generation rc
+  dir=$(make_case branch-repeat-ack)
+  state="$dir/state"
+
+  append_wake "$state" signal "task-a.status" "signal: task-a" || fail "signal append failed"
+  FM_STATE_OVERRIDE="$state" "$GRANT" activate "$$" repeat-ack || fail "branch owner activation failed"
+  FM_STATE_OVERRIDE="$state" "$GRANT" publish repeat-ack 1 || fail "branch grant publication failed"
+
+  out="$dir/branch-drain.out"
+  err="$dir/branch-drain.err"
+  FM_STATE_OVERRIDE="$state" FM_SUPERVISION_ACTOR=branch "$DRAIN" > "$out" 2> "$err" \
+    || fail "branch drain failed: $(cat "$err")"
+  sequence=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through \([0-9][0-9]*\) --recovery-generation [A-Za-z0-9._-][A-Za-z0-9._-]*$/\1/p' "$err")
+  generation=$(sed -n 's/^WAKE_ACK_REQUIRED:.*--ack-through [0-9][0-9]* --recovery-generation \([A-Za-z0-9._-][A-Za-z0-9._-]*\)$/\1/p' "$err")
+  [ "$sequence" = 1 ] && [ -n "$generation" ] || fail "branch drain omitted its acknowledgement boundary"
+  FM_STATE_OVERRIDE="$state" FM_SUPERVISION_ACTOR=branch "$DRAIN" --ack-through "$sequence" --recovery-generation "$generation" \
+    || fail "first branch acknowledgement failed"
+  [ ! -s "$state/.wake-queue" ] || fail "first branch acknowledgement left its granted row queued"
+
+  # A main-owned row arrives mid-turn; the repeated branch calls must leave it alone.
+  append_wake "$state" check "some-poll.check.sh" "check: some-poll.check.sh: merged" \
+    || fail "main-only append failed"
+
+  rc=0
+  FM_STATE_OVERRIDE="$state" FM_SUPERVISION_ACTOR=branch "$DRAIN" --ack-through 2 --recovery-generation "$generation" \
+    > "$out" 2> "$err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "repeated branch acknowledgement of a spent grant failed ($rc): $(cat "$err")"
+  grep -Fq "already acknowledged" "$err" || fail "repeated branch acknowledgement did not say its rows were already acknowledged: $(cat "$err")"
+  ! grep -Fq "no branch-eligible row snapshot" "$err" || fail "repeated branch acknowledgement still claims no grant exists"
+  grep -Fq "$(printf '\tcheck\tsome-poll.check.sh\t')" "$state/.wake-queue" \
+    || fail "repeated branch acknowledgement consumed a main-owned row it was never granted"
+
+  rc=0
+  FM_STATE_OVERRIDE="$state" FM_SUPERVISION_ACTOR=branch "$DRAIN" > "$out" 2> "$err" || rc=$?
+  [ "$rc" -eq 0 ] || fail "repeated branch drain of a spent grant failed ($rc): $(cat "$err")"
+  grep -Fq "already acknowledged" "$err" || fail "repeated branch drain did not say its rows were already acknowledged: $(cat "$err")"
+  ! grep -Fq "some-poll.check.sh" "$out" || fail "repeated branch drain presented a main-owned row"
+  ! grep -Fq "WAKE_ACK_REQUIRED" "$err" || fail "repeated branch drain invited another acknowledgement"
+
+  # Once the turn's grant is released, a branch drain is the wiring-bug case again.
+  FM_STATE_OVERRIDE="$state" "$GRANT" release repeat-ack || fail "branch grant release failed"
+  [ ! -e "$state/.branch-eligible-spent" ] || fail "grant release kept the spent-grant record"
+  rc=0
+  FM_STATE_OVERRIDE="$state" FM_SUPERVISION_ACTOR=branch "$DRAIN" > "$out" 2> "$err" || rc=$?
+  [ "$rc" -ne 0 ] || fail "a branch drain after the grant was released did not refuse"
+  grep -Fq "no branch-eligible row snapshot" "$err" || fail "a released-grant branch drain gave the wrong refusal: $(cat "$err")"
+
+  # A new grant replaces any spent record, so it can never vouch for a later turn.
+  append_wake "$state" signal "task-b.status" "signal: task-b" || fail "second signal append failed"
+  FM_STATE_OVERRIDE="$state" FM_SUPERVISION_ACTOR=branch "$DRAIN" --ack-through 3 --recovery-generation "$generation" \
+    > /dev/null 2>&1 && fail "an ungranted branch acknowledgement succeeded"
+  grep -Fq "$(printf '\tsignal\ttask-b.status\t')" "$state/.wake-queue" \
+    || fail "an ungranted branch acknowledgement consumed a row"
+
+  pass "a repeated branch acknowledgement of a spent grant reports already acknowledged and consumes nothing else"
+}
+
 # The away posture lets a branch grant name a check-kind row, so the branch
 # ack must close the same publish-before-receipt crash window the main ack
 # does: consuming a secondmate-wake-loop row commits its stall receipt under
@@ -3541,6 +3603,7 @@ test_enrichment_preserves_all_unread_lines_and_status_file_failures
 test_slow_annotation_does_not_block_append_and_deleted_file_fails_open
 test_branch_actor_scoped_ack_never_swallows_a_main_owned_row
 test_main_drain_excludes_rows_already_granted_to_branch
+test_branch_repeat_ack_after_spent_grant_reports_already_acknowledged
 test_branch_ack_commits_secondmate_stall_receipts
 test_main_is_never_told_to_drain_rows_only_the_branch_owns
 test_uncountable_queue_still_raises_the_pending_alarm

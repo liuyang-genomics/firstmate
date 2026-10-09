@@ -27,12 +27,14 @@
 //     this close at all, trigger class included), then the same five lines
 //     `scope` prints for the scan it judged. --afk judges it under the away
 //     posture.
-//   fm-branch-dispatch.mjs wake-prompt --report <surface> [--mirror-file <path>] [--away [--readback-file <path>]]
+//   fm-branch-dispatch.mjs wake-prompt --report <surface> [--mirror-file <path>] [--relay-rules <path>] [--away [--readback-file <path>]]
 //     Read the watcher's wake reason from stdin and print the branch wake
 //     prompt naming <surface> as the report surface. --mirror-file puts the
 //     host's dialog-mirror feed (bin/fm-host-mirror.sh) at its head; an empty
 //     feed adds nothing, and a feed that cannot be read exits 3 with no
-//     prompt, so the host hands the wake to main. --away appends the away tail with the
+//     prompt, so the host hands the wake to main. --relay-rules renders the
+//     standing relays block from that config file (standingRelaysFor owns the
+//     parse); a missing file adds nothing. --away appends the away tail with the
 //     record read-back from <path>; a missing or empty read-back prints the
 //     tail's fixed unavailable notice instead.
 //
@@ -49,7 +51,7 @@ const dispatch = await import(pathToFileURL(path.join(root, ".pi", "extensions",
 
 function usage() {
   process.stderr.write(
-    "usage: fm-branch-dispatch.mjs scope [--heartbeat] [--afk] | offer [--afk] | wake-prompt --report <surface> [--mirror-file <path>] [--away [--readback-file <path>]]\n",
+    "usage: fm-branch-dispatch.mjs scope [--heartbeat] [--afk] | offer [--afk] | wake-prompt --report <surface> [--mirror-file <path>] [--relay-rules <path>] [--away [--readback-file <path>]]\n",
   );
   process.exit(2);
 }
@@ -105,12 +107,14 @@ if (command === "scope") {
   let away = false;
   let readbackFile = "";
   let mirrorFile = "";
+  let relayRulesFile = "";
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--report" && index + 1 < args.length) report = args[++index];
     else if (arg === "--away") away = true;
     else if (arg === "--readback-file" && index + 1 < args.length) readbackFile = args[++index];
     else if (arg === "--mirror-file" && index + 1 < args.length) mirrorFile = args[++index];
+    else if (arg === "--relay-rules" && index + 1 < args.length) relayRulesFile = args[++index];
     else usage();
   }
   if (!report) usage();
@@ -124,8 +128,18 @@ if (command === "scope") {
       process.exit(3);
     }
   }
+  let relays = "";
+  if (relayRulesFile) {
+    let rules = "";
+    try {
+      rules = readFileSync(relayRulesFile, "utf8");
+    } catch (error) {
+      rules = error?.code === "ENOENT" ? "" : null;
+    }
+    relays = dispatch.standingRelaysFor(rules);
+  }
   const tail = away ? dispatch.awayPostureTailFor(readOptional(readbackFile)) : "";
-  process.stdout.write(`${dispatch.branchWakePrompt(message, report, tail, mirror)}\n`);
+  process.stdout.write(`${dispatch.branchWakePrompt(message, report, tail, mirror, relays)}\n`);
 } else {
   usage();
 }

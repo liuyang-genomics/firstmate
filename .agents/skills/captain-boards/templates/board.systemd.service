@@ -1,0 +1,16 @@
+# systemd user unit for a captain board (Linux).
+# Fill the @PLACEHOLDERS@, save as ~/.config/systemd/user/@LABEL@.service, then:
+#   systemctl --user daemon-reload && systemctl --user enable --now @LABEL@.service
+# Run `loginctl enable-linger $USER` once if the board must stay up while you are logged out.
+[Unit]
+Description=Captain board @LABEL@ on @BIND@:@PORT@
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=@PYTHON3@ @SERVE_SCRIPT@ @PORT@ @BIND@ @ROOT@
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

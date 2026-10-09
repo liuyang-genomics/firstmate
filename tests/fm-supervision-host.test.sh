@@ -452,6 +452,68 @@ test_dispatch_entry_scopes_rows_and_renders_the_away_tail() {
   pass "dispatch entry: the host reads branch eligibility, the offer rule, and the wake prompt from the Pi branch's own owner"
 }
 
+test_dispatch_entry_works_without_typescript() {
+  local home state ts plain fixture rc
+  # A Node.js without TypeScript support (Ubuntu's distribution Node 22 is
+  # compiled without the stripper) cannot load the .ts owner, so the entry
+  # must fall back to the generated copy and answer exactly as the owner does.
+  if [ "$(node --no-experimental-strip-types -p 'Boolean(process.features.typescript)' 2>/dev/null)" != false ]; then
+    printf 'skip: this node cannot run with TypeScript support turned off\n'
+    return 0
+  fi
+  home="$TMP_ROOT/dispatch-plain"
+  state="$home/state"
+  mkdir -p "$state"
+  printf 'project=demo\nwindow=fm-demo\n' > "$state/demo.meta"
+  append_wake "$state" signal demo.status "signal: $state/demo.status"
+  append_wake "$state" check merge "check: merge landed: fixture"
+
+  plain=$(printf 'signal: %s\n' "$state/demo.status" | FM_HOME="$home" node --no-experimental-strip-types "$DISPATCH" offer 2>&1)
+  assert_contains "$plain" "eligible=1" "a Node.js without TypeScript must still compute branch eligibility"
+  assert_contains "$plain" "rows=1" "a Node.js without TypeScript must still scope the claimable rows"
+  for args in "scope" "scope --afk" "scope --heartbeat"; do
+    # shellcheck disable=SC2086 # each case is a word list
+    ts=$(FM_HOME="$home" node "$DISPATCH" $args 2>&1)
+    # shellcheck disable=SC2086
+    plain=$(FM_HOME="$home" node --no-experimental-strip-types "$DISPATCH" $args 2>&1)
+    [ "$ts" = "$plain" ] || fail "scope $args without TypeScript must match the owner: owner=[$ts] plain=[$plain]"
+  done
+  for reason in "signal: $state/demo.status" "check: merge landed: fixture" "heartbeat: fleet review"; do
+    ts=$(printf '%s\n' "$reason" | FM_HOME="$home" node "$DISPATCH" offer --afk 2>&1)
+    plain=$(printf '%s\n' "$reason" | FM_HOME="$home" node --no-experimental-strip-types "$DISPATCH" offer --afk 2>&1)
+    [ "$ts" = "$plain" ] || fail "offer for '$reason' without TypeScript must match the owner: owner=[$ts] plain=[$plain]"
+  done
+  printf 'Away posture (recorded):\n  your words (verbatim):\n    merge nothing\n' > "$home/readback"
+  ts=$(printf 'signal: demo.status\n' | FM_HOME="$home" node "$DISPATCH" wake-prompt --report 'the report' --away --readback-file "$home/readback" 2>&1)
+  plain=$(printf 'signal: demo.status\n' | FM_HOME="$home" node --no-experimental-strip-types "$DISPATCH" wake-prompt --report 'the report' --away --readback-file "$home/readback" 2>&1)
+  [ "$ts" = "$plain" ] || fail "the wake prompt without TypeScript must match the owner"
+
+  # The generated copy must be current with its .ts owner, and a stale copy
+  # must be reported rather than silently diverging.
+  rc=0
+  node "$ROOT/bin/fm-branch-dispatch-build.mjs" --check >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    printf 'skip: this node has no TypeScript stripper to check the generated copy\n'
+  else
+    [ "$rc" -eq 0 ] || fail "bin/fm-branch-dispatch-js/ is stale; rerun bin/fm-branch-dispatch-build.mjs"
+    fixture="$TMP_ROOT/dispatch-build"
+    mkdir -p "$fixture/bin" "$fixture/.pi/extensions/lib"
+    cp "$ROOT/bin/fm-branch-dispatch-build.mjs" "$fixture/bin/"
+    cp -R "$ROOT/bin/fm-branch-dispatch-js" "$fixture/bin/"
+    cp "$ROOT/.pi/extensions/lib/fm-branch-dispatch.ts" "$ROOT/.pi/extensions/lib/fm-async-exec.ts" "$fixture/.pi/extensions/lib/"
+    node "$fixture/bin/fm-branch-dispatch-build.mjs" --check >/dev/null 2>&1 || fail "a fresh copy must pass the check"
+    printf 'export const addedRule: number = 1;\n' >> "$fixture/.pi/extensions/lib/fm-branch-dispatch.ts"
+    rc=0
+    node "$fixture/bin/fm-branch-dispatch-build.mjs" --check >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 1 ] || fail "an owner edit without regeneration must fail the check with 1, got $rc"
+    node "$fixture/bin/fm-branch-dispatch-build.mjs" || fail "regeneration must succeed"
+    node "$fixture/bin/fm-branch-dispatch-build.mjs" --check >/dev/null 2>&1 || fail "a regenerated copy must pass the check"
+    plain=$(node --no-experimental-strip-types --input-type=module -e "const m = await import('$fixture/bin/fm-branch-dispatch-js/fm-branch-dispatch.mjs'); console.log(m.addedRule)" 2>&1)
+    [ "$plain" = 1 ] || fail "the regenerated copy must carry the owner's edit as plain JavaScript: $plain"
+  fi
+  pass "dispatch entry: a Node.js without TypeScript support computes branch eligibility from the generated copy, identical to the owner"
+}
+
 test_dispatch_entry_renders_standing_relays() {
   local home out
   home="$TMP_ROOT/dispatch-relays"
@@ -3194,6 +3256,7 @@ test_park_exit_probe_uses_half_second_child_sleeps
 test_report_surface_enforces_actor_turn_and_scope
 test_report_after_the_return_is_queued_for_main
 test_dispatch_entry_scopes_rows_and_renders_the_away_tail
+test_dispatch_entry_works_without_typescript
 test_dispatch_entry_renders_standing_relays
 test_branch_outcomes_only_on_a_host_home_off_pi
 test_branch_outcomes_put_captain_first_and_collapse_routine_overflow

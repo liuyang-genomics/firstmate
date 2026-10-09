@@ -7,6 +7,10 @@
 // single owner of which queued rows the branch may claim and of the wake text,
 // and this file only prints that module's answers in a shape a shell can read.
 // The Pi branch extension and this entry therefore apply identical rules.
+// A Node.js that cannot load TypeScript (process.features.typescript is not
+// set, as on distribution builds compiled without the stripper) imports the
+// generated plain-JavaScript copy under bin/fm-branch-dispatch-js/ instead,
+// which bin/fm-branch-dispatch-build.mjs produces from the same owner.
 //
 // Usage:
 //   fm-branch-dispatch.mjs scope [--heartbeat] [--afk]
@@ -47,7 +51,10 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const dispatch = await import(pathToFileURL(path.join(root, ".pi", "extensions", "lib", "fm-branch-dispatch.ts")).href);
+const library = process.features.typescript
+  ? path.join(root, ".pi", "extensions", "lib", "fm-branch-dispatch.ts")
+  : path.join(root, "bin", "fm-branch-dispatch-js", "fm-branch-dispatch.mjs");
+const dispatch = await import(pathToFileURL(library).href);
 
 function usage() {
   process.stderr.write(

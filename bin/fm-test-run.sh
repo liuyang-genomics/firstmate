@@ -433,7 +433,8 @@ family_for_basename() {
     fm-send-remote-delivery.test.sh|fm-spawn-pool-base-freshen.test.sh|\
     fm-test-fixture-cleanup.test.sh|fm-test-fixtures.test.sh|\
     fm-voice-relay.test.sh|fm-wake-drain-open-decisions-cursor.test.sh|\
-    fm-wake-drain-open-decisions.test.sh|fm-wake-drain-outcome-backstop.test.sh)
+    fm-wake-drain-open-decisions.test.sh|fm-wake-drain-outcome-backstop.test.sh|\
+    fm-wake-brief.test.sh)
       printf '%s\n' standalone
       ;;
     *)

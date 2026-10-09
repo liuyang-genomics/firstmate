@@ -288,7 +288,7 @@ test_park_delivers_actionable_wake_as_followup() {
     || fail "an actionable close must arrive as a watcher-kind follow-up, got: $out"
   body=$(followup_of "$out")
   case "$body" in *'stale: fixture-win needs a look'*) ;; *) fail "the wake reason was not carried into the follow-up: $body" ;; esac
-  case "$body" in *'fm-wake-drain.sh'*) ;; *) fail "the follow-up must tell the session to drain first: $body" ;; esac
+  case "$body" in *'fm-wake-brief.sh'*) ;; *) fail "the follow-up must tell the session to drain first: $body" ;; esac
   pass "cursor park: an actionable close is delivered as one watcher-kind follow-up"
 }
 

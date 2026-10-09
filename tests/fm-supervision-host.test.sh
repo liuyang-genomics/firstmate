@@ -47,6 +47,9 @@ FAKE_CLAUDE="$FAKEBIN/claude"
 #   return-first the captain returns first, then handle, then block until the
 #               host is stopped (an owner killing its host at the turn's end)
 #   noack       the same as handle, but skip the acknowledgement
+#   relay       the same as handle, but act on the wake's standing relay: send
+#               the .mp4 path the drain presented to the rule's target with a
+#               plain fm-send and report the relay as routine
 #   held        handle, but first block reading the $FM_HOME/stub-release FIFO
 #               until the test writes to it, so the test chooses when the turn
 #               ends
@@ -92,7 +95,7 @@ verdict=routine
 [ "$mode" != go-away ] || verdict=captain
 case "$mode" in
   fail) exit 3 ;;
-  handle|captain|captain-close-before-return|held|captain-held|hold-lease|return|return-silent|return-fail|return-fail-silent|return-many|return-lookup-fail|return-first|noack|emptyresult|go-away)
+  handle|captain|captain-close-before-return|held|captain-held|hold-lease|return|return-silent|return-fail|return-fail-silent|return-many|return-lookup-fail|return-first|noack|emptyresult|go-away|relay)
     case "$mode" in held|captain-held) read -r _ < "$FM_HOME/stub-release" ;; esac
     [ "$mode" != return-first ] || "$FM_REPO/bin/fm-afk-contract.sh" archive >> "$FM_HOME/engine-return.log" 2>&1
     [ "$mode" != go-away ] || "$FM_REPO/bin/fm-afk-contract.sh" enter --words 'gone mid-turn' >> "$FM_HOME/engine-return.log" 2>&1
@@ -102,6 +105,14 @@ case "$mode" in
       "$FM_REPO/bin/fm-branch-report.sh" --task "$task" --verdict captain \
         --summary "stub escalated: $(printf '%s\n' "$drain" | grep -v '^WAKE_' | tr '\n' ' ' | cut -c1-400)" \
         >> "$FM_HOME/engine-report.log" 2>&1
+    elif [ "$mode" = relay ]; then
+      to=$(sed -n "s/^- $task [^ ]* -> //p" "$FM_HOME/engine-call.$n" | head -1)
+      artifact=$(printf '%s\n' "$drain" | grep -o '/[^ ]*\.mp4' | head -1)
+      "$FM_REPO/bin/fm-lease.sh" claim "$to" >> "$FM_HOME/engine-lease.log" 2>&1
+      "$FM_REPO/bin/fm-send.sh" "$to" "$task delivered video: $artifact" >> "$FM_HOME/engine-send.log" 2>&1
+      "$FM_REPO/bin/fm-lease.sh" release "$to" >> "$FM_HOME/engine-lease.log" 2>&1
+      "$FM_REPO/bin/fm-branch-report.sh" --task "$task" --verdict routine \
+        --summary "relayed $artifact from $task to $to" >> "$FM_HOME/engine-report.log" 2>&1
     else
       report_args=(--task "$task" --verdict "$verdict" --summary "stub handled $task")
       case "$mode" in
@@ -435,7 +446,39 @@ test_dispatch_entry_scopes_rows_and_renders_the_away_tail() {
   assert_contains "$out" "finish with the bin/fm-branch-report.sh command." "the wake prompt must name the host's report surface"
   assert_contains "$out" "POSTURE: AWAY." "an away wake prompt must carry the posture tail"
   assert_contains "$out" "    merge nothing" "the away tail must carry the record's read-back verbatim"
+  assert_not_contains "$out" "STANDING RELAYS" "a wake prompt without relay rules must carry no relays block"
   pass "dispatch entry: the host reads branch eligibility, the offer rule, and the wake prompt from the Pi branch's own owner"
+}
+
+test_dispatch_entry_renders_standing_relays() {
+  local home out
+  home="$TMP_ROOT/dispatch-relays"
+  mkdir -p "$home/state" "$home/config"
+  out=$(printf 'signal: demo.status\n' | FM_HOME="$home" node "$DISPATCH" wake-prompt --report 'the bin/fm-branch-report.sh command' --relay-rules "$home/config/relay-rules")
+  assert_not_contains "$out" "STANDING RELAYS" "a missing rules file must add nothing"
+
+  printf '# chapter handoffs\n\ncreator  qc-passed-chapter-video ->  publisher\nproducer final-chapter-audio -> creator\n' > "$home/config/relay-rules"
+  printf 'Away posture (recorded):\n  your words (verbatim):\n    merge nothing\n' > "$home/readback"
+  out=$(printf 'signal: creator.status\n' | FM_HOME="$home" node "$DISPATCH" wake-prompt --report 'the bin/fm-branch-report.sh command' --relay-rules "$home/config/relay-rules" --away --readback-file "$home/readback")
+  assert_contains "$out" "STANDING RELAYS (the captain's standing routing rules from config/relay-rules" "a rules file must render the relays block"
+  assert_contains "$out" $'\n- creator qc-passed-chapter-video -> publisher\n- producer final-chapter-audio -> creator\n' "each rule must render normalized, in file order"
+  assert_not_contains "$out" "chapter handoffs" "a comment must not render"
+  case "$out" in
+    *"STANDING RELAYS"*"POSTURE: AWAY."*) ;;
+    *) fail "the relays block must come before the away tail: $out" ;;
+  esac
+
+  for bad in 'creator qc-passed-chapter-video publisher' 'creator qc-passed -> creator' 'creator qc passed -> publisher' 'creator $(x) -> publisher'; do
+    printf 'producer final-chapter-audio -> creator\n%s\n' "$bad" > "$home/config/relay-rules"
+    out=$(printf 'signal: creator.status\n' | FM_HOME="$home" node "$DISPATCH" wake-prompt --report 'the bin/fm-branch-report.sh command' --relay-rules "$home/config/relay-rules")
+    assert_contains "$out" "STANDING RELAYS UNAVAILABLE: config/relay-rules line 2 is not" "a malformed rule ($bad) must render the unavailable notice"
+    assert_not_contains "$out" "- producer final-chapter-audio -> creator" "a malformed file ($bad) must render none of its rules"
+  done
+  rm -f "$home/config/relay-rules"
+  mkdir "$home/config/relay-rules"
+  out=$(printf 'signal: creator.status\n' | FM_HOME="$home" node "$DISPATCH" wake-prompt --report 'the bin/fm-branch-report.sh command' --relay-rules "$home/config/relay-rules")
+  assert_contains "$out" "STANDING RELAYS UNAVAILABLE: config/relay-rules exists but could not be read" "an unreadable rules file must render the unavailable notice"
+  pass "dispatch entry: standing relays render from config/relay-rules, and a malformed or unreadable file relays nothing"
 }
 
 # --- host loop ----------------------------------------------------------------
@@ -882,6 +925,7 @@ test_attended_routine_wake_is_handled_on_the_engine_and_stays_off_main() {
   first="$home/engine-call.1"
   assert_re '^actor=branch$' "$first" "the attended engine must run as the branch actor"
   assert_no_re '^POSTURE: AWAY' "$first" "an attended wake must carry no away tail"
+  assert_no_re 'STANDING RELAYS' "$first" "a home without relay rules must carry no relays block"
   assert_re '^(arg=)?FIRSTMATE SUPERVISION WAKE: signal: ' "$first" "the attended wake must carry the close"
   assert_re '	handled	turn=[^	]*	posture=attended	' "$home/state/.supervision-host.log" "the ledger must record the attended turn"
   assert_grep '"verdict":"routine"' "$home/state/branch-outcomes.jsonl" "the engine's routine report did not reach the store"
@@ -900,6 +944,30 @@ test_attended_routine_wake_is_handled_on_the_engine_and_stays_off_main() {
   drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
   assert_not_contains "$drained" "[seq 1]" "a routine outcome must be listed only once"
   pass "host: an attended wake the branch may take is handled on the engine, and its routine outcome never wakes main"
+}
+
+test_attended_standing_relay_is_handled_on_the_engine_and_stays_off_main() {
+  local home drained
+  home=$(make_home attended-relay attended)
+  echo relay > "$home/stub-mode"
+  printf 'project=demo\nwindow=fm-publisher\nharness=claude\n' > "$home/state/publisher.meta"
+  printf 'demo qc-passed-chapter-video -> publisher\n' > "$home/config/relay-rules"
+  start_host "$home"
+  wait_until 150 watcher_live "$home" || fail "relay: the host never started a watcher cycle"
+  append_status "$home" 'CHAPTER 1 VIDEO QC PASSED /media/out/ch01-1080p.mp4' 'done'
+  wait_until 250 handled_at_least "$home" 1 \
+    || fail "relay: the wake was not handled on the engine: $(cat "$home/host.out"; cat "$home/state/.supervision-host.log")"
+  assert_re '^STANDING RELAYS \(the captain' "$home/engine-call.1" "the attended wake must carry the relays block"
+  assert_re '^- demo qc-passed-chapter-video -> publisher$' "$home/engine-call.1" "the wake must carry the rule"
+  assert_grep 'demo delivered video: /media/out/ch01-1080p.mp4' "$home/state/publisher.inbox/001.msg" "the relay must reach the target's steering inbox with the exact path"
+  assert_grep '"summary":"relayed /media/out/ch01-1080p.mp4 from demo to publisher"' "$home/state/branch-outcomes.jsonl" "the relay must be stored as an outcome"
+  assert_grep '"verdict":"routine"' "$home/state/branch-outcomes.jsonl" "the relay must be a routine outcome"
+  [ ! -s "$home/host.rc" ] || fail "a standing relay reached main: $(cat "$home/host.out")"
+  watcher_live "$home" || fail "the host is not parked on a live successor after a relay"
+  drained=$(FM_HOME="$home" "$FAKE_CLAUDE" -c '"$0" 2>&1' "$ROOT/bin/fm-wake-drain.sh")
+  assert_contains "$drained" "[seq 1] demo: relayed /media/out/ch01-1080p.mp4 from demo to publisher" "main's next drain must list the relay for awareness"
+  assert_not_contains "$drained" "mark-processed" "a relay must ask main for no acknowledgement"
+  pass "host: a standing relay is sent by the engine as a plain steer and recorded as a routine outcome, without waking main"
 }
 
 test_attended_captain_outcome_reaches_main_through_branch_outcomes() {
@@ -2961,6 +3029,7 @@ test_park_exit_probe_uses_half_second_child_sleeps
 test_report_surface_enforces_actor_turn_and_scope
 test_report_after_the_return_is_queued_for_main
 test_dispatch_entry_scopes_rows_and_renders_the_away_tail
+test_dispatch_entry_renders_standing_relays
 test_branch_outcomes_only_on_a_host_home_off_pi
 test_branch_outcomes_put_captain_first_and_collapse_routine_overflow
 test_branch_outcomes_collapse_repeated_captain_outcomes_per_task
@@ -2976,6 +3045,7 @@ test_branch_outcomes_keep_an_unshown_outcome_until_acknowledged
 test_branch_outcomes_keep_a_drain_presented_outcome_across_a_switch_to_pi
 test_branch_outcomes_keep_a_drain_presented_outcome_across_an_index_repair
 test_attended_routine_wake_is_handled_on_the_engine_and_stays_off_main
+test_attended_standing_relay_is_handled_on_the_engine_and_stays_off_main
 test_attended_captain_outcome_reaches_main_through_branch_outcomes
 test_captain_leaving_mid_turn_keeps_its_captain_outcome_for_the_return
 test_quiet_record_without_its_daemon_is_a_present_captain

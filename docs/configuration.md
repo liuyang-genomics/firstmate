@@ -11,7 +11,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
 | Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), [worker tool exclusions](#worker-tool-exclusions-configcrew-exclude-tools), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
-| Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
+| Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), [standing relays](#standing-relays-configrelay-rules), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
@@ -337,6 +337,28 @@ The opt-out is inherited into secondmate homes: a primary that opts out also opt
 The primary-authoritative propagation contract, including removal of a mate's local opt-out when the primary has none, is owned by [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md).
 `config/supervision-host` is local to each home and not inherited, because each home's engine and model are its own choice.
 While the home runs the host, main's lease-checked commands also take the per-task lease lock, so a claim by the host's engine cannot race a mutation main already started (`bin/fm-lease-lib.sh`).
+
+## Standing relays (config/relay-rules)
+
+Optional local, gitignored `config/relay-rules` names pure-routing handoffs the supervision host's engine performs itself, so a finished artifact moves from one task to the next without a main turn per item.
+Each relay is recorded as a routine outcome that main sees in its next drain, while decisions, failures, credentials, review-ready work, and anything else the [verdict rules](../bin/fm-branch-prompt.sh) make captain still wake main at once.
+
+The file holds one rule per line, `<from-task> <what> -> <to-task>`; blank lines and lines starting with `#` are ignored:
+
+```text
+# Creator hands each QC-passed chapter video to the Publisher.
+creator qc-passed-chapter-video -> publisher
+producer final-chapter-audio -> creator
+```
+
+Each token is one word of letters, digits, `.`, `_`, or `-`, and the two tasks differ.
+`<from-task>` and `<to-task>` are task ids in this home, usually second mates; `<what>` names the artifact kind the engine matches against the source's status line.
+The host renders the rules into every engine wake message, attended and away, and `bin/fm-branch-prompt.sh` "Standing relays" owns how the engine applies them: an exact path copied from a newly presented line, one plain `bin/fm-send.sh` steer per artifact, never from a decision, blocker, or failure line, and a doubtful match reported to main instead of guessed.
+A relay moves the artifact's path only; the target's own gates, such as a publish approval, are untouched.
+
+A file with any line that is not a rule, or one that cannot be read, renders an unavailable notice instead of its rules, so the engine relays nothing and reports any such handoff to main naming the file.
+The host reads the file at every wake, so a change takes effect at the next wake.
+It is local to each home and not inherited by secondmates, and only the supervision host renders it today; a Pi primary's in-process branch receives no rules.
 
 ## Backlog backend (.tasks.toml / config/backlog-backend)
 

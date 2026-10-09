@@ -49,7 +49,7 @@ Until they land, their current behavior stays as described in their own owners.
 | The loop | `bin/fm-supervision-host.sh` | Its header owns the per-close order, the park boundary and elapsed clock, arm-exit sampling and signal-observation latency, ownership checks, predecessor cleanup, state files, and tunables. |
 | The arm owners | Each primary's existing arm owner | Runs the host for a home that runs it and delivers a handed-back wake to main; see [Arm owners](#arm-owners). |
 | The engine | `bin/fm-supervision-engine-lib.sh` | Owns the home gate, including the default on Claude and the opt-out, the verified-engine list, and one bounded engine turn, including the reap of engine tool processes that outlive it. |
-| Row eligibility and the offer rule | `bin/fm-branch-dispatch.mjs` | The command entry to `.pi/extensions/lib/fm-branch-dispatch.ts`, so the host and the Pi extension compute branch-claimable rows, their task scope, and whether the branch may take a close (`branchOfferForWake`) from one owner; it also renders the wake message with the same away-posture tail, or the dialog mirror at its head. |
+| Row eligibility and the offer rule | `bin/fm-branch-dispatch.mjs` | The command entry to `.pi/extensions/lib/fm-branch-dispatch.ts`, so the host and the Pi extension compute branch-claimable rows, their task scope, and whether the branch may take a close (`branchOfferForWake`) from one owner; it also renders the wake message with the same away-posture tail, or the dialog mirror at its head, plus any [standing relays](configuration.md#standing-relays-configrelay-rules). |
 | The grant and the drain | `bin/fm-wake-grant.sh` | Publishes the branch's rows bound to the host's own process; [watcher-continuity.md](watcher-continuity.md#per-actor-acknowledgement) owns the per-actor drain and acknowledgement the engine runs. |
 | The prompt | `bin/fm-branch-prompt.sh` | Emits the same byte-stable prompt the Pi branch runs; each wake names its host's report surface. |
 | The report surface | `bin/fm-branch-report.sh` | The command twin of the Pi branch's `fm_branch_report` tool, with the same task scoping; see [The report surface](#the-report-surface). |
@@ -163,7 +163,7 @@ On each actionable close the engine takes, the host runs these steps:
 
 1. It starts and verifies the successor watcher cycle and confirms the handling handoff, so the fleet stays supervised while the engine works.
 2. It computes the branch-claimable rows in the turn's posture and publishes the grant.
-3. It runs one bounded engine turn with the branch prompt and the wake message carrying, attended, the dialog mirror and, away, the record's read-back.
+3. It runs one bounded engine turn with the branch prompt and the wake message carrying, attended, the dialog mirror and, away, the record's read-back, plus in either posture the captain's [standing relays](configuration.md#standing-relays-configrelay-rules).
    The engine drains, handles, reports through `bin/fm-branch-report.sh`, and acknowledges, exactly as the Pi branch does.
 4. It releases the branch's leases and grant, whether or not the wake was handled.
 5. It parks on the successor only for a handled wake.

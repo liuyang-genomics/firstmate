@@ -72,7 +72,8 @@
 # (bin/fm-wake-grant.sh), runs one bounded headless engine turn
 # (bin/fm-supervision-engine-lib.sh) with the generated branch prompt
 # (bin/fm-branch-prompt.sh), the dialog-mirror feed (bin/fm-host-mirror.sh)
-# at the head of an attended wake and the away tail instead when away,
+# at the head of an attended wake and the away tail instead when away, and
+# the captain's standing relays (config/relay-rules) in either posture,
 # releases the branch's leases and grant, and counts the wake handled only
 # when that turn exited cleanly, recorded a durable report
 # (bin/fm-branch-report.sh), and left none of its granted rows in the wake
@@ -924,7 +925,7 @@ handle_wake() {  # <reason-lines>
     HANDLE_WHY="the dialog mirror could not be read"
     return 1
   fi
-  set -- --report "the bin/fm-branch-report.sh command"
+  set -- --report "the bin/fm-branch-report.sh command" --relay-rules "$CONFIG/relay-rules"
   if [ "$TURN_POSTURE" = away ]; then
     set -- "$@" --away ${readback:+--readback-file "$readback"}
   else
